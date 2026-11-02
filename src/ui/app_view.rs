@@ -290,11 +290,14 @@ pub struct AppView {
     pub state: AppState,
     root_focus: FocusHandle,
     rfc_input: Entity<InputState>,
+    excel_format_input: Entity<InputState>,
     tabs: Entity<KitTabs>,
     config_repository: TomlConfigRepository,
     table_scroll_handles: [UniformListScrollHandle; 4],
     table_h_scroll_handles: [ScrollHandle; 4],
     _rfc_subscription: Subscription,
+    _excel_format_subscription: Subscription,
+    _shortcut_subscriptions: [Subscription; 5],
     tab_subscription: Subscription,
     pending_drop: Option<PathBuf>,
     pending_toast: Option<(String, bool)>,
@@ -313,6 +316,26 @@ impl AppView {
         rfc_input.update(cx, |input, cx| {
             input.set_content_silent(state.rfc_propio.clone(), cx);
         });
+
+        let excel_format_input = cx.new(InputState::new_singleline);
+        excel_format_input.update(cx, |input, cx| {
+            input.set_content_silent(state.config.excel.formato_nombre_archivo.clone(), cx);
+        });
+
+        let shortcut_inputs: [Entity<InputState>; 5] = std::array::from_fn(|index| {
+            let input = cx.new(InputState::new_singleline);
+            let value = match index {
+                0 => state.config.atajos.abrir_zip.clone(),
+                1 => state.config.atajos.exportar.clone(),
+                2 => state.config.atajos.abrir_configuracion.clone(),
+                3 => state.config.atajos.pestaña_1.clone(),
+                4 => state.config.atajos.pestaña_2.clone(),
+                _ => String::new(),
+            };
+            input.update(cx, |input, cx| input.set_content_silent(value, cx));
+            input
+        });
+
         let tabs = tabs::create(cx, None, Vista::Cfdi);
         let appearance_subscription = cx.observe_window_appearance(window, |_, window, cx| {
             theme::follow_system_appearance(window.appearance(), cx);
@@ -334,16 +357,52 @@ impl AppView {
                     cx.notify();
                 }
             });
+        let excel_format_subscription = cx.subscribe(
+            &excel_format_input,
+            |this, input, event: &InputStateEvent, cx| {
+                if matches!(event, InputStateEvent::TextChanged) {
+                    let value = input.read(cx).content();
+                    let trimmed = value.trim();
+                    this.state.config.excel.formato_nombre_archivo = if trimmed.is_empty() {
+                        "cfdi_{YYYYMMDD}_{HHmm}.xlsx".to_owned()
+                    } else {
+                        trimmed.to_owned()
+                    };
+                    cx.notify();
+                }
+            },
+        );
+        let shortcut_subscriptions = std::array::from_fn(|index| {
+            let input = shortcut_inputs[index].clone();
+            cx.subscribe(&input, move |this, input, event: &InputStateEvent, cx| {
+                if matches!(event, InputStateEvent::TextChanged) {
+                    let value = input.read(cx).content().trim().to_owned();
+                    let current = match index {
+                        0 => &mut this.state.config.atajos.abrir_zip,
+                        1 => &mut this.state.config.atajos.exportar,
+                        2 => &mut this.state.config.atajos.abrir_configuracion,
+                        3 => &mut this.state.config.atajos.pestaña_1,
+                        4 => &mut this.state.config.atajos.pestaña_2,
+                        _ => return,
+                    };
+                    *current = value;
+                    cx.notify();
+                }
+            })
+        });
         let tab_subscription = Self::subscribe_tabs(cx, &tabs);
         Self {
             state,
             root_focus: cx.focus_handle(),
             rfc_input,
+            excel_format_input,
             tabs,
             config_repository,
             table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
             table_h_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
             _rfc_subscription: rfc_subscription,
+            _excel_format_subscription: excel_format_subscription,
+            _shortcut_subscriptions: shortcut_subscriptions,
             tab_subscription,
             pending_drop: None,
             pending_toast: None,
@@ -622,6 +681,44 @@ impl AppView {
         cx.notify();
     }
 
+    fn restore_section_defaults(&mut self) {
+        match self.state.settings_section {
+            SettingsSection::General => {
+                self.state.config.general = crate::domain::config::GeneralConfig::default()
+            }
+            SettingsSection::Extraccion => {
+                self.state.config.extraccion = crate::domain::config::ExtraccionConfig::default()
+            }
+            SettingsSection::Clasificacion => {
+                self.state.config.clasificacion =
+                    crate::domain::config::ClasificacionConfig::default()
+            }
+            SettingsSection::Excel => {
+                self.state.config.excel = crate::domain::config::ExcelConfig::default()
+            }
+            SettingsSection::Tabla => {
+                self.state.config.tabla = crate::domain::config::TablaConfig::default()
+            }
+            SettingsSection::Apariencia => {
+                self.state.config.apariencia = crate::domain::config::AparienciaConfig::default()
+            }
+            SettingsSection::Atajos => {
+                self.state.config.atajos = crate::domain::config::AtajosConfig::default()
+            }
+            SettingsSection::Avanzado => {
+                self.state.config.avanzado = crate::domain::config::AvanzadoConfig::default()
+            }
+        }
+        self.state.sync_rfc_from_config();
+        self.pending_toast = Some(("Sección restaurada".to_owned(), true));
+    }
+
+    fn restore_all_defaults(&mut self) {
+        self.state.config = AppConfig::default();
+        self.state.sync_rfc_from_config();
+        self.pending_toast = Some(("Configuración restaurada".to_owned(), true));
+    }
+
     fn save_config(&mut self, cx: &mut Context<Self>) {
         let config = self.state.config.clone();
         let result = ConfigService::new(self.config_repository.clone()).guardar(&config);
@@ -683,7 +780,10 @@ impl AppView {
         let preview = format_filename_preview(&config.excel.formato_nombre_archivo);
         let section = self.state.settings_section;
 
-        let nav = h_stack()
+        let nav = div()
+            .w_full()
+            .flex()
+            .flex_wrap()
             .gap_2()
             .child(
                 button("settings-general", "General").on_click(cx.listener(|this, _, _, cx| {
@@ -736,6 +836,34 @@ impl AppView {
             .child(
                 button("settings-avanzado", "Avanzado").on_click(cx.listener(|this, _, _, cx| {
                     this.state.settings_section = SettingsSection::Avanzado;
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("restore-section", "Restaurar sección").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.restore_section_defaults();
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("restore-all", "Restaurar todo").on_click(cx.listener(|this, _, _, cx| {
+                    this.restore_all_defaults();
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("import-settings", "Importar").on_click(cx.listener(|this, _, _, cx| {
+                    this.pending_toast =
+                        Some(("Importar configuración (próximamente)".to_owned(), true));
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("export-settings", "Exportar").on_click(cx.listener(|this, _, _, cx| {
+                    this.pending_toast =
+                        Some(("Exportar configuración (próximamente)".to_owned(), true));
                     cx.notify();
                 })),
             )
@@ -817,7 +945,116 @@ impl AppView {
                         .gap_3()
                         .items_center()
                         .child(text("Tipos incluidos").small().muted())
-                        .child(text("I, E, P, N, T").small().muted()),
+                        .child(
+                            h_stack()
+                                .gap_2()
+                                .child(
+                                    button(
+                                        "tipo-i",
+                                        if self.state.config.extraccion.incluir_tipos.i {
+                                            "I: Sí"
+                                        } else {
+                                            "I: No"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.extraccion.incluir_tipos.i =
+                                                !this.state.config.extraccion.incluir_tipos.i;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "tipo-e",
+                                        if self.state.config.extraccion.incluir_tipos.e {
+                                            "E: Sí"
+                                        } else {
+                                            "E: No"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.extraccion.incluir_tipos.e =
+                                                !this.state.config.extraccion.incluir_tipos.e;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "tipo-p",
+                                        if self.state.config.extraccion.incluir_tipos.p {
+                                            "P: Sí"
+                                        } else {
+                                            "P: No"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.extraccion.incluir_tipos.p =
+                                                !this.state.config.extraccion.incluir_tipos.p;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "tipo-n",
+                                        if self.state.config.extraccion.incluir_tipos.n {
+                                            "N: Sí"
+                                        } else {
+                                            "N: No"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.extraccion.incluir_tipos.n =
+                                                !this.state.config.extraccion.incluir_tipos.n;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "tipo-t",
+                                        if self.state.config.extraccion.incluir_tipos.t {
+                                            "T: Sí"
+                                        } else {
+                                            "T: No"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.extraccion.incluir_tipos.t =
+                                                !this.state.config.extraccion.incluir_tipos.t;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Origen emitida/recibida").small().muted())
+                        .child(
+                            button(
+                                "columna-origen",
+                                if self.state.config.extraccion.columna_origen_emitida_recibida {
+                                    "Activada"
+                                } else {
+                                    "Desactivada"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.extraccion.columna_origen_emitida_recibida =
+                                    !this.state.config.extraccion.columna_origen_emitida_recibida;
+                                cx.notify();
+                            })),
+                        ),
                 )
                 .into_any_element(),
             SettingsSection::Clasificacion => v_stack()
@@ -854,6 +1091,27 @@ impl AppView {
                             })),
                         ),
                 )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Ingreso/Gasto por RFC").small().muted())
+                        .child(
+                            button(
+                                "regla-rfc",
+                                if self.state.config.clasificacion.regla_ingreso_gasto_por_rfc {
+                                    "Activada"
+                                } else {
+                                    "Desactivada"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.clasificacion.regla_ingreso_gasto_por_rfc =
+                                    !this.state.config.clasificacion.regla_ingreso_gasto_por_rfc;
+                                cx.notify();
+                            })),
+                        ),
+                )
                 .into_any_element(),
             SettingsSection::Excel => v_stack()
                 .gap_3()
@@ -863,14 +1121,74 @@ impl AppView {
                         .items_center()
                         .child(text("Formato Excel").small().muted())
                         .child(
-                            div().w(px(240.)).child(
-                                text(format!(
-                                    "{} · vista previa: {}",
-                                    config.excel.formato_nombre_archivo, preview
-                                ))
-                                .small()
-                                .muted(),
+                            div().w(px(260.)).child(
+                                text_field(&self.excel_format_input, cx)
+                                    .placeholder("cfdi_{YYYYMMDD}_{HHmm}.xlsx"),
                             ),
+                        ),
+                )
+                .child(div().child(text(format!("Vista previa: {}", preview)).small().muted()))
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Cabeceras congeladas").small().muted())
+                        .child(
+                            button(
+                                "excel-freeze-header",
+                                if self.state.config.excel.congelar_encabezado {
+                                    "Sí"
+                                } else {
+                                    "No"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.excel.congelar_encabezado =
+                                    !this.state.config.excel.congelar_encabezado;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Autofiltro").small().muted())
+                        .child(
+                            button(
+                                "excel-autofilter",
+                                if self.state.config.excel.autofiltro {
+                                    "Sí"
+                                } else {
+                                    "No"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.excel.autofiltro =
+                                    !this.state.config.excel.autofiltro;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Ancho automático").small().muted())
+                        .child(
+                            button(
+                                "excel-auto-width",
+                                if self.state.config.excel.ancho_automatico {
+                                    "Sí"
+                                } else {
+                                    "No"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.excel.ancho_automatico =
+                                    !this.state.config.excel.ancho_automatico;
+                                cx.notify();
+                            })),
                         ),
                 )
                 .child(
@@ -894,18 +1212,6 @@ impl AppView {
                             })),
                         ),
                 )
-                .child(
-                    h_stack()
-                        .gap_3()
-                        .items_center()
-                        .child(text("Altura de fila").small().muted())
-                        .child(button("row-height-mini", "32 px").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.state.config.tabla.altura_fila = 32;
-                                cx.notify();
-                            },
-                        ))),
-                )
                 .into_any_element(),
             SettingsSection::Tabla => v_stack()
                 .gap_3()
@@ -915,9 +1221,88 @@ impl AppView {
                         .items_center()
                         .child(text("Altura de fila").small().muted())
                         .child(
-                            text(self.state.config.tabla.altura_fila.to_string())
-                                .small()
-                                .muted(),
+                            h_stack()
+                                .gap_2()
+                                .child(
+                                    button(
+                                        "row-height-28",
+                                        if self.state.config.tabla.altura_fila == 28 {
+                                            "28 ✓"
+                                        } else {
+                                            "28"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.tabla.altura_fila = 28;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "row-height-32",
+                                        if self.state.config.tabla.altura_fila == 32 {
+                                            "32 ✓"
+                                        } else {
+                                            "32"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.tabla.altura_fila = 32;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "row-height-36",
+                                        if self.state.config.tabla.altura_fila == 36 {
+                                            "36 ✓"
+                                        } else {
+                                            "36"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.tabla.altura_fila = 36;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "row-height-40",
+                                        if self.state.config.tabla.altura_fila == 40 {
+                                            "40 ✓"
+                                        } else {
+                                            "40"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.tabla.altura_fila = 40;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "row-height-44",
+                                        if self.state.config.tabla.altura_fila == 44 {
+                                            "44 ✓"
+                                        } else {
+                                            "44"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.tabla.altura_fila = 44;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
                         ),
                 )
                 .child(
@@ -950,13 +1335,118 @@ impl AppView {
                         .items_center()
                         .child(text("Tema").small().muted())
                         .child(
-                            text(match self.state.config.apariencia.tema {
-                                crate::domain::config::TemaApp::Sistema => "Sistema",
-                                crate::domain::config::TemaApp::Claro => "Claro",
-                                crate::domain::config::TemaApp::Oscuro => "Oscuro",
-                            })
-                            .small()
-                            .muted(),
+                            h_stack()
+                                .gap_2()
+                                .child(
+                                    button(
+                                        "theme-system",
+                                        if matches!(
+                                            self.state.config.apariencia.tema,
+                                            crate::domain::config::TemaApp::Sistema
+                                        ) {
+                                            "Sistema ✓"
+                                        } else {
+                                            "Sistema"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.apariencia.tema =
+                                                crate::domain::config::TemaApp::Sistema;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "theme-light",
+                                        if matches!(
+                                            self.state.config.apariencia.tema,
+                                            crate::domain::config::TemaApp::Claro
+                                        ) {
+                                            "Claro ✓"
+                                        } else {
+                                            "Claro"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.apariencia.tema =
+                                                crate::domain::config::TemaApp::Claro;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "theme-dark",
+                                        if matches!(
+                                            self.state.config.apariencia.tema,
+                                            crate::domain::config::TemaApp::Oscuro
+                                        ) {
+                                            "Oscuro ✓"
+                                        } else {
+                                            "Oscuro"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.apariencia.tema =
+                                                crate::domain::config::TemaApp::Oscuro;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Densidad").small().muted())
+                        .child(
+                            h_stack()
+                                .gap_2()
+                                .child(
+                                    button(
+                                        "density-compact",
+                                        if matches!(
+                                            self.state.config.apariencia.densidad,
+                                            crate::domain::config::DensidadApp::Compacta
+                                        ) {
+                                            "Compacta ✓"
+                                        } else {
+                                            "Compacta"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.apariencia.densidad =
+                                                crate::domain::config::DensidadApp::Compacta;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "density-normal",
+                                        if matches!(
+                                            self.state.config.apariencia.densidad,
+                                            crate::domain::config::DensidadApp::Normal
+                                        ) {
+                                            "Normal ✓"
+                                        } else {
+                                            "Normal"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.apariencia.densidad =
+                                                crate::domain::config::DensidadApp::Normal;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
                         ),
                 )
                 .child(
@@ -987,6 +1477,17 @@ impl AppView {
                         .child(text("Atajo exportar").small().muted())
                         .child(text(&self.state.config.atajos.exportar).small().muted()),
                 )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Abrir configuración").small().muted())
+                        .child(
+                            text(&self.state.config.atajos.abrir_configuracion)
+                                .small()
+                                .muted(),
+                        ),
+                )
                 .into_any_element(),
             SettingsSection::Avanzado => v_stack()
                 .gap_3()
@@ -996,9 +1497,81 @@ impl AppView {
                         .items_center()
                         .child(text("Hilos de procesamiento").small().muted())
                         .child(
-                            text(&self.state.config.avanzado.hilos_de_procesamiento)
-                                .small()
-                                .muted(),
+                            h_stack()
+                                .gap_2()
+                                .child(
+                                    button(
+                                        "threads-auto",
+                                        if self.state.config.avanzado.hilos_de_procesamiento
+                                            == "Auto"
+                                        {
+                                            "Auto ✓"
+                                        } else {
+                                            "Auto"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.avanzado.hilos_de_procesamiento =
+                                                "Auto".to_owned();
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "threads-1",
+                                        if self.state.config.avanzado.hilos_de_procesamiento == "1"
+                                        {
+                                            "1 ✓"
+                                        } else {
+                                            "1"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.avanzado.hilos_de_procesamiento =
+                                                "1".to_owned();
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "threads-2",
+                                        if self.state.config.avanzado.hilos_de_procesamiento == "2"
+                                        {
+                                            "2 ✓"
+                                        } else {
+                                            "2"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.avanzado.hilos_de_procesamiento =
+                                                "2".to_owned();
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    button(
+                                        "threads-4",
+                                        if self.state.config.avanzado.hilos_de_procesamiento == "4"
+                                        {
+                                            "4 ✓"
+                                        } else {
+                                            "4"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.state.config.avanzado.hilos_de_procesamiento =
+                                                "4".to_owned();
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
                         ),
                 )
                 .child(
@@ -1022,6 +1595,27 @@ impl AppView {
                             })),
                         ),
                 )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Registro de depuración").small().muted())
+                        .child(
+                            button(
+                                "registro-depuracion",
+                                if self.state.config.avanzado.registro_de_depuracion {
+                                    "Sí"
+                                } else {
+                                    "No"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.avanzado.registro_de_depuracion =
+                                    !this.state.config.avanzado.registro_de_depuracion;
+                                cx.notify();
+                            })),
+                        ),
+                )
                 .into_any_element(),
         };
 
@@ -1040,7 +1634,14 @@ impl AppView {
                     ),
             )
             .child(nav)
-            .child(section_content);
+            .child(
+                div()
+                    .w_full()
+                    .max_h(px(420.))
+                    .overflow_hidden()
+                    .pr_1()
+                    .child(section_content),
+            );
 
         let form = if invalid.is_empty() {
             form
@@ -1057,8 +1658,9 @@ impl AppView {
             .justify_center()
             .child(
                 div()
-                    .w(px(760.))
-                    .max_h(px(540.))
+                    .w(px(900.))
+                    .max_w(px(900.))
+                    .max_h(px(620.))
                     .overflow_hidden()
                     .bg(cx.theme().surface())
                     .border_1()
