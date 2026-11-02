@@ -30,11 +30,14 @@ use rust_decimal::Decimal;
 
 use crate::{
     application::{
+        config_service::ConfigService,
         ports::ExcelExporter,
         procesar_zip::{ProcesarZip, ResultadoProceso},
     },
+    domain::config::AppConfig,
     infrastructure::{
-        xlsx_exporter::XlsxExporter, xml_parser::XmlCfdiParser, zip_reader::ZipXmlReader,
+        config_toml::TomlConfigRepository, xlsx_exporter::XlsxExporter, xml_parser::XmlCfdiParser,
+        zip_reader::ZipXmlReader,
     },
 };
 
@@ -112,6 +115,19 @@ pub enum EstadoApp {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SettingsSection {
+    #[default]
+    General,
+    Extraccion,
+    Clasificacion,
+    Excel,
+    Tabla,
+    Apariencia,
+    Atajos,
+    Avanzado,
+}
+
 #[derive(Clone, Debug)]
 pub struct ResultadosVista {
     pub filas: Arc<Vec<crate::domain::cfdi::CfdiRow>>,
@@ -142,6 +158,7 @@ pub struct AppState {
     pub estado: EstadoApp,
     pub ruta_zip: Option<PathBuf>,
     pub rfc_propio: String,
+    pub config: AppConfig,
     pub vista: Vista,
     pub resultados: Option<Arc<ResultadosVista>>,
     pub procesados: usize,
@@ -149,14 +166,18 @@ pub struct AppState {
     pub mensaje_error: Option<String>,
     pub ruta_exportada: Option<PathBuf>,
     pub exportando: bool,
+    pub settings_open: bool,
+    pub settings_section: SettingsSection,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let config = AppConfig::default();
         Self {
             estado: EstadoApp::Vacio,
             ruta_zip: None,
-            rfc_propio: String::new(),
+            rfc_propio: config.general.rfc_propio.clone().unwrap_or_default(),
+            config,
             vista: Vista::Cfdi,
             resultados: None,
             procesados: 0,
@@ -164,6 +185,8 @@ impl Default for AppState {
             mensaje_error: None,
             ruta_exportada: None,
             exportando: false,
+            settings_open: false,
+            settings_section: SettingsSection::General,
         }
     }
 }
@@ -199,6 +222,10 @@ impl AppState {
     pub fn set_progress(&mut self, processed: usize, total: usize) {
         self.procesados = processed.min(total);
         self.total = total;
+    }
+
+    pub fn sync_rfc_from_config(&mut self) {
+        self.rfc_propio = self.config.general.rfc_propio.clone().unwrap_or_default();
     }
 
     pub fn finish_processing(&mut self, resultado: ResultadoProceso, tablas: TablasPreparadas) {
@@ -264,6 +291,7 @@ pub struct AppView {
     root_focus: FocusHandle,
     rfc_input: Entity<InputState>,
     tabs: Entity<KitTabs>,
+    config_repository: TomlConfigRepository,
     table_scroll_handles: [UniformListScrollHandle; 4],
     table_h_scroll_handles: [ScrollHandle; 4],
     _rfc_subscription: Subscription,
@@ -275,7 +303,16 @@ pub struct AppView {
 
 impl AppView {
     pub fn new(cx: &mut Context<Self>, window: &mut Window) -> Self {
+        let config_repository = TomlConfigRepository::new();
+        let mut state = AppState::default();
+        let loaded = ConfigService::new(config_repository.clone()).cargar_o_default();
+        state.config = loaded.clone();
+        state.sync_rfc_from_config();
+
         let rfc_input = cx.new(InputState::new_singleline);
+        rfc_input.update(cx, |input, cx| {
+            input.set_content_silent(state.rfc_propio.clone(), cx);
+        });
         let tabs = tabs::create(cx, None, Vista::Cfdi);
         let appearance_subscription = cx.observe_window_appearance(window, |_, window, cx| {
             theme::follow_system_appearance(window.appearance(), cx);
@@ -288,16 +325,22 @@ impl AppView {
                     if value != input.read(cx).content() {
                         input.update(cx, |input, cx| input.set_content_silent(value.clone(), cx));
                     }
-                    this.state.rfc_propio = value;
+                    this.state.rfc_propio = value.clone();
+                    this.state.config.general.rfc_propio = if value.trim().is_empty() {
+                        None
+                    } else {
+                        Some(value)
+                    };
                     cx.notify();
                 }
             });
         let tab_subscription = Self::subscribe_tabs(cx, &tabs);
         Self {
-            state: AppState::default(),
+            state,
             root_focus: cx.focus_handle(),
             rfc_input,
             tabs,
+            config_repository,
             table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
             table_h_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
             _rfc_subscription: rfc_subscription,
@@ -550,6 +593,10 @@ impl AppView {
                 self.select_tab(Vista::Errores, cx);
                 true
             }
+            "," => {
+                self.open_settings(cx);
+                true
+            }
             _ => false,
         };
         if handled {
@@ -561,6 +608,29 @@ impl AppView {
         self.state.vista = tab;
         self.tabs
             .update(cx, |tabs, cx| tabs.set_selected(tab.id().into(), cx));
+        cx.notify();
+    }
+
+    fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.state.settings_open = true;
+        self.state.settings_section = SettingsSection::General;
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, cx: &mut Context<Self>) {
+        self.state.settings_open = false;
+        cx.notify();
+    }
+
+    fn save_config(&mut self, cx: &mut Context<Self>) {
+        let config = self.state.config.clone();
+        let result = ConfigService::new(self.config_repository.clone()).guardar(&config);
+        self.state.settings_open = false;
+        if result.is_ok() {
+            self.pending_toast = Some(("Configuración guardada".to_owned(), true));
+        } else {
+            self.pending_toast = Some(("No se pudo guardar la configuración".to_owned(), false));
+        }
         cx.notify();
     }
 
@@ -605,6 +675,398 @@ impl AppView {
                 self.render_preview().into_any_element()
             }
         }
+    }
+
+    fn render_settings_modal(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let config = self.state.config.clone();
+        let invalid = config.validar();
+        let preview = format_filename_preview(&config.excel.formato_nombre_archivo);
+        let section = self.state.settings_section;
+
+        let nav = h_stack()
+            .gap_2()
+            .child(
+                button("settings-general", "General").on_click(cx.listener(|this, _, _, cx| {
+                    this.state.settings_section = SettingsSection::General;
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("settings-extraccion", "Extracción").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.state.settings_section = SettingsSection::Extraccion;
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("settings-clasificacion", "Clasificación").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.state.settings_section = SettingsSection::Clasificacion;
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("settings-excel", "Excel").on_click(cx.listener(|this, _, _, cx| {
+                    this.state.settings_section = SettingsSection::Excel;
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("settings-tabla", "Tabla").on_click(cx.listener(|this, _, _, cx| {
+                    this.state.settings_section = SettingsSection::Tabla;
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("settings-apariencia", "Apariencia").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.state.settings_section = SettingsSection::Apariencia;
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("settings-atajos", "Atajos").on_click(cx.listener(|this, _, _, cx| {
+                    this.state.settings_section = SettingsSection::Atajos;
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("settings-avanzado", "Avanzado").on_click(cx.listener(|this, _, _, cx| {
+                    this.state.settings_section = SettingsSection::Avanzado;
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("save-settings", "Guardar")
+                    .on_click(cx.listener(|this, _, _, cx| this.save_config(cx))),
+            );
+
+        let section_content = match section {
+            SettingsSection::General => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("RFC propio").small().muted())
+                        .child(div().w(px(220.)).child(
+                            text_field(&self.rfc_input, cx).placeholder("Ej. ABC010101ABC"),
+                        )),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Recordar RFC").small().muted())
+                        .child(
+                            button(
+                                "remember-rfc",
+                                if self.state.config.general.recordar_rfc {
+                                    "Activado"
+                                } else {
+                                    "Desactivado"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.general.recordar_rfc =
+                                    !this.state.config.general.recordar_rfc;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .into_any_element(),
+            SettingsSection::Extraccion => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Impuestos por concepto").small().muted())
+                        .child(
+                            button(
+                                "repetir-impuestos",
+                                if self
+                                    .state
+                                    .config
+                                    .extraccion
+                                    .repetir_impuestos_en_cada_concepto
+                                {
+                                    "Repetir en cada concepto"
+                                } else {
+                                    "Solo en la primera fila"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state
+                                    .config
+                                    .extraccion
+                                    .repetir_impuestos_en_cada_concepto = !this
+                                    .state
+                                    .config
+                                    .extraccion
+                                    .repetir_impuestos_en_cada_concepto;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Tipos incluidos").small().muted())
+                        .child(text("I, E, P, N, T").small().muted()),
+                )
+                .into_any_element(),
+            SettingsSection::Clasificacion => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Regla por defecto").small().muted())
+                        .child(
+                            text(&self.state.config.clasificacion.categoria_por_defecto)
+                                .small()
+                                .muted(),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Nómina por tipo N").small().muted())
+                        .child(
+                            button(
+                                "regla-nomina",
+                                if self.state.config.clasificacion.regla_nomina_tipo_n {
+                                    "Activada"
+                                } else {
+                                    "Desactivada"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.clasificacion.regla_nomina_tipo_n =
+                                    !this.state.config.clasificacion.regla_nomina_tipo_n;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .into_any_element(),
+            SettingsSection::Excel => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Formato Excel").small().muted())
+                        .child(
+                            div().w(px(240.)).child(
+                                text(format!(
+                                    "{} · vista previa: {}",
+                                    config.excel.formato_nombre_archivo, preview
+                                ))
+                                .small()
+                                .muted(),
+                            ),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Abrir carpeta al exportar").small().muted())
+                        .child(
+                            button(
+                                "open-folder-export",
+                                if self.state.config.excel.abrir_carpeta_al_exportar {
+                                    "Sí"
+                                } else {
+                                    "No"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.excel.abrir_carpeta_al_exportar =
+                                    !this.state.config.excel.abrir_carpeta_al_exportar;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Altura de fila").small().muted())
+                        .child(button("row-height-mini", "32 px").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.state.config.tabla.altura_fila = 32;
+                                cx.notify();
+                            },
+                        ))),
+                )
+                .into_any_element(),
+            SettingsSection::Tabla => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Altura de fila").small().muted())
+                        .child(
+                            text(self.state.config.tabla.altura_fila.to_string())
+                                .small()
+                                .muted(),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Hover").small().muted())
+                        .child(
+                            button(
+                                "mostrar-hover",
+                                if self.state.config.tabla.mostrar_hover {
+                                    "Activado"
+                                } else {
+                                    "Desactivado"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.tabla.mostrar_hover =
+                                    !this.state.config.tabla.mostrar_hover;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .into_any_element(),
+            SettingsSection::Apariencia => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Tema").small().muted())
+                        .child(
+                            text(match self.state.config.apariencia.tema {
+                                crate::domain::config::TemaApp::Sistema => "Sistema",
+                                crate::domain::config::TemaApp::Claro => "Claro",
+                                crate::domain::config::TemaApp::Oscuro => "Oscuro",
+                            })
+                            .small()
+                            .muted(),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Color de acento").small().muted())
+                        .child(
+                            text(&self.state.config.apariencia.color_acento)
+                                .small()
+                                .muted(),
+                        ),
+                )
+                .into_any_element(),
+            SettingsSection::Atajos => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Atajo abrir ZIP").small().muted())
+                        .child(text(&self.state.config.atajos.abrir_zip).small().muted()),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Atajo exportar").small().muted())
+                        .child(text(&self.state.config.atajos.exportar).small().muted()),
+                )
+                .into_any_element(),
+            SettingsSection::Avanzado => v_stack()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Hilos de procesamiento").small().muted())
+                        .child(
+                            text(&self.state.config.avanzado.hilos_de_procesamiento)
+                                .small()
+                                .muted(),
+                        ),
+                )
+                .child(
+                    h_stack()
+                        .gap_3()
+                        .items_center()
+                        .child(text("Errores detallados").small().muted())
+                        .child(
+                            button(
+                                "mostrar-errores-detallados",
+                                if self.state.config.avanzado.mostrar_errores_detallados {
+                                    "Sí"
+                                } else {
+                                    "No"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.config.avanzado.mostrar_errores_detallados =
+                                    !this.state.config.avanzado.mostrar_errores_detallados;
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .into_any_element(),
+        };
+
+        let form = v_stack()
+            .w_full()
+            .gap_3()
+            .child(
+                h_stack()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(text("Configuración").small())
+                    .child(
+                        button("close-settings", "Cerrar")
+                            .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx))),
+                    ),
+            )
+            .child(nav)
+            .child(section_content);
+
+        let form = if invalid.is_empty() {
+            form
+        } else {
+            form.child(div().child(text(invalid[0].mensaje.clone()).small().destructive()))
+        };
+
+        div()
+            .absolute()
+            .inset_0()
+            .bg(cx.theme().bg())
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(760.))
+                    .max_h(px(540.))
+                    .overflow_hidden()
+                    .bg(cx.theme().surface())
+                    .border_1()
+                    .border_color(cx.theme().border())
+                    .rounded(px(12.))
+                    .p_4()
+                    .child(form),
+            )
     }
 
     fn render_preview(&mut self) -> impl IntoElement {
@@ -785,6 +1247,9 @@ impl Render for AppView {
                     }
                 }),
             ))
+            .when(self.state.settings_open, |element| {
+                element.child(self.render_settings_modal(cx))
+            })
             .child(drop_listener)
     }
 }
@@ -857,6 +1322,11 @@ impl AppView {
                         )
                         .disabled(!enabled || is_processing)
                         .on_click(cx.listener(|this, _, _, cx| this.process_zip(cx))),
+                    )
+                    .child(
+                        button("settings-button", "⚙")
+                            .control_size(ControlSize::Small)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),
             )
     }
@@ -878,6 +1348,16 @@ pub fn validar_rfc(value: &str) -> Option<&'static str> {
         return Some("Usa solo letras, números, Ñ o &");
     }
     None
+}
+
+fn format_filename_preview(template: &str) -> String {
+    let now = Local::now();
+    template
+        .replace("{YYYYMMDD}", &now.format("%Y%m%d").to_string())
+        .replace("{HHmm}", &now.format("%H%M").to_string())
+        .replace("{YYYY}", &now.format("%Y").to_string())
+        .replace("{MM}", &now.format("%m").to_string())
+        .replace("{DD}", &now.format("%d").to_string())
 }
 
 fn normalizar_caja_rfc(value: &str) -> String {

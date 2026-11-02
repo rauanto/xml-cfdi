@@ -51,6 +51,8 @@ Todo cambio en el parser requiere fixture en `tests/fixtures/`:
 
 Ejecutar `cargo test` antes de dar una tarea por terminada.
 
+Regla adicional: todo valor nuevo configurable debe vivir en `AppConfig` con su `Default`, su validación y su test correspondiente. Si un ajuste solo cambia presentación/exportación/classificación, va ahí; si cambia el XML o el dato extraído, no se agrega a config.
+
 ## Hojas del Excel (contrato)
 
 1. CFDI nivel concepto · 2. Resumen por producto (`ClaveProdServ + Descripción`, suma de importe) · 3. Clasificación contable sugerida (Ingreso, Gasto, Honorarios, Nómina, Inversión, Otros) · 4. Errores.

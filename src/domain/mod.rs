@@ -2,4 +2,5 @@
 
 pub mod cfdi;
 pub mod clasificacion;
+pub mod config;
 pub mod error;
