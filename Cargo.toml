@@ -1,0 +1,20 @@
+[package]
+name = "cfdi-zip-processor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+gpui = "0.2.2"
+quick-xml = "0.42.0"
+rust_decimal = "1.43.0"
+rust_xlsxwriter = "0.102.0"
+thiserror = "2.0.21"
+zip = "9.2.2"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+
+# xattr 0.2.3 assumes ENOATTR exists on Linux; Linux uses ENODATA.
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }

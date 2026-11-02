@@ -1,5 +1,6 @@
 # Compilación de Rust
 /target/
+*.xlsx
 
 # Cargo.lock SÍ se versiona (es una aplicación, no una librería)
 
