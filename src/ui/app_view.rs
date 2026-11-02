@@ -128,6 +128,15 @@ pub enum SettingsSection {
     Avanzado,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ConfigSaveStatus {
+    #[default]
+    Saved,
+    Saving,
+    Invalid,
+    Failed,
+}
+
 #[derive(Clone, Debug)]
 pub struct ResultadosVista {
     pub filas: Arc<Vec<crate::domain::cfdi::CfdiRow>>,
@@ -295,6 +304,9 @@ pub struct AppView {
     config_repository: TomlConfigRepository,
     table_scroll_handles: [UniformListScrollHandle; 4],
     table_h_scroll_handles: [ScrollHandle; 4],
+    last_config_snapshot: AppConfig,
+    config_save_generation: u64,
+    config_save_status: ConfigSaveStatus,
     _rfc_subscription: Subscription,
     _excel_format_subscription: Subscription,
     _shortcut_subscriptions: [Subscription; 5],
@@ -311,6 +323,7 @@ impl AppView {
         let loaded = ConfigService::new(config_repository.clone()).cargar_o_default();
         state.config = loaded.clone();
         state.sync_rfc_from_config();
+        theme::apply_configured_appearance(&state.config.apariencia.tema, window.appearance(), cx);
 
         let rfc_input = cx.new(InputState::new_singleline);
         rfc_input.update(cx, |input, cx| {
@@ -337,8 +350,12 @@ impl AppView {
         });
 
         let tabs = tabs::create(cx, None, Vista::Cfdi);
-        let appearance_subscription = cx.observe_window_appearance(window, |_, window, cx| {
-            theme::follow_system_appearance(window.appearance(), cx);
+        let appearance_subscription = cx.observe_window_appearance(window, |this, window, cx| {
+            theme::apply_configured_appearance(
+                &this.state.config.apariencia.tema,
+                window.appearance(),
+                cx,
+            );
             cx.notify();
         });
         let rfc_subscription =
@@ -391,6 +408,7 @@ impl AppView {
             })
         });
         let tab_subscription = Self::subscribe_tabs(cx, &tabs);
+        let last_config_snapshot = state.config.clone();
         Self {
             state,
             root_focus: cx.focus_handle(),
@@ -400,6 +418,9 @@ impl AppView {
             config_repository,
             table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
             table_h_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
+            last_config_snapshot,
+            config_save_generation: 0,
+            config_save_status: ConfigSaveStatus::Saved,
             _rfc_subscription: rfc_subscription,
             _excel_format_subscription: excel_format_subscription,
             _shortcut_subscriptions: shortcut_subscriptions,
@@ -720,15 +741,83 @@ impl AppView {
     }
 
     fn save_config(&mut self, cx: &mut Context<Self>) {
+        if let Some(error) = self.state.config.validar().first() {
+            self.config_save_status = ConfigSaveStatus::Invalid;
+            self.pending_toast = Some((error.mensaje.clone(), false));
+            cx.notify();
+            return;
+        }
         let config = self.state.config.clone();
         let result = ConfigService::new(self.config_repository.clone()).guardar(&config);
-        self.state.settings_open = false;
+        self.last_config_snapshot = config;
+        self.config_save_generation = self.config_save_generation.wrapping_add(1);
         if result.is_ok() {
+            self.config_save_status = ConfigSaveStatus::Saved;
             self.pending_toast = Some(("Configuración guardada".to_owned(), true));
         } else {
+            self.config_save_status = ConfigSaveStatus::Failed;
             self.pending_toast = Some(("No se pudo guardar la configuración".to_owned(), false));
         }
         cx.notify();
+    }
+
+    fn schedule_config_save(&mut self, cx: &mut Context<Self>) {
+        if self.state.config == self.last_config_snapshot {
+            return;
+        }
+
+        self.last_config_snapshot = self.state.config.clone();
+        self.config_save_generation = self.config_save_generation.wrapping_add(1);
+        let generation = self.config_save_generation;
+        if !self.state.config.validar().is_empty() {
+            self.config_save_status = ConfigSaveStatus::Invalid;
+            return;
+        }
+
+        self.config_save_status = ConfigSaveStatus::Saving;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+
+            let pending = this
+                .update(cx, |this, _| {
+                    if this.config_save_generation != generation {
+                        return None;
+                    }
+                    if !this.state.config.validar().is_empty() {
+                        this.config_save_status = ConfigSaveStatus::Invalid;
+                        return None;
+                    }
+                    Some((this.config_repository.clone(), this.state.config.clone()))
+                })
+                .ok()
+                .flatten();
+
+            let Some((repository, config)) = pending else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { ConfigService::new(repository).guardar(&config) })
+                .await;
+
+            if let Err(error) = &result {
+                eprintln!("No se pudo guardar la configuración automáticamente: {error}");
+            }
+            this.update(cx, |this, cx| {
+                if this.config_save_generation == generation {
+                    this.config_save_status = if result.is_ok() {
+                        ConfigSaveStatus::Saved
+                    } else {
+                        ConfigSaveStatus::Failed
+                    };
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn render_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -868,7 +957,7 @@ impl AppView {
                 })),
             )
             .child(
-                button("save-settings", "Guardar")
+                button("save-settings", "Guardar ahora")
                     .on_click(cx.listener(|this, _, _, cx| this.save_config(cx))),
             );
 
@@ -1619,29 +1708,44 @@ impl AppView {
                 .into_any_element(),
         };
 
-        let form = v_stack()
-            .w_full()
-            .gap_3()
-            .child(
-                h_stack()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .child(text("Configuración").small())
-                    .child(
-                        button("close-settings", "Cerrar")
-                            .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx))),
-                    ),
-            )
-            .child(nav)
-            .child(
-                div()
-                    .w_full()
-                    .max_h(px(420.))
-                    .overflow_hidden()
-                    .pr_1()
-                    .child(section_content),
-            );
+        let form =
+            v_stack()
+                .w_full()
+                .gap_3()
+                .child(
+                    h_stack()
+                        .w_full()
+                        .justify_between()
+                        .items_center()
+                        .child(text("Configuración").small())
+                        .child(
+                            h_stack()
+                                .gap_3()
+                                .items_center()
+                                .child(
+                                    text(match self.config_save_status {
+                                        ConfigSaveStatus::Saved => "Guardado",
+                                        ConfigSaveStatus::Saving => "Guardando cambios…",
+                                        ConfigSaveStatus::Invalid => "Revisa los campos",
+                                        ConfigSaveStatus::Failed => "Error al guardar",
+                                    })
+                                    .small()
+                                    .muted(),
+                                )
+                                .child(button("close-settings", "Cerrar").on_click(
+                                    cx.listener(|this, _, _, cx| this.close_settings(cx)),
+                                )),
+                        ),
+                )
+                .child(nav)
+                .child(
+                    div()
+                        .w_full()
+                        .max_h(px(420.))
+                        .overflow_hidden()
+                        .pr_1()
+                        .child(section_content),
+                );
 
         let form = if invalid.is_empty() {
             form
@@ -1650,12 +1754,14 @@ impl AppView {
         };
 
         div()
+            .id("settings-overlay")
             .absolute()
             .inset_0()
             .bg(cx.theme().bg())
             .flex()
             .items_center()
             .justify_center()
+            .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
                     .w(px(900.))
@@ -1716,7 +1822,12 @@ enum WorkerMessage {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        theme::follow_system_appearance(window.appearance(), cx);
+        self.schedule_config_save(cx);
+        theme::apply_configured_appearance(
+            &self.state.config.apariencia.tema,
+            window.appearance(),
+            cx,
+        );
         let status = self.state.status_text();
         let exported = self.state.ruta_exportada.clone();
         let is_processing = self.state.estado == EstadoApp::Procesando;
