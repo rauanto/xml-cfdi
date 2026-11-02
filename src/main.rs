@@ -1,8 +1,3 @@
-pub mod application;
-pub mod domain;
-pub mod infrastructure;
-pub mod ui;
-
 use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
@@ -21,7 +16,7 @@ fn main() -> anyhow::Result<()> {
             },
             |window, cx| {
                 window.set_window_title("CFDI ZIP Processor");
-                cx.new(|_| ui::AppView)
+                cx.new(|_| cfdi_zip_processor::ui::AppView)
             },
         );
 

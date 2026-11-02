@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante
+    xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+    xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+    Version="4.0"
+    Fecha="2024-01-02T03:04:05"
+    SubTotal="100.00"
+    Descuento="5.00"
+    Moneda="MXN"
+    TipoCambio="1.00"
+    Total="109.00"
+    TipoDeComprobante="I"
+    FormaPago="03"
+    MetodoPago="PUE">
+  <cfdi:Emisor Rfc="AAA010101AAA" Nombre="Empresa &amp; Socios"/>
+  <cfdi:Receptor Rfc="BBB010101BBB" Nombre="Cliente" UsoCFDI="G03"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="10101500" Cantidad="1" ClaveUnidad="H87" Descripcion="Producto uno" ValorUnitario="10.00" Importe="10.00">
+      <cfdi:Impuestos>
+        <cfdi:Traslados><cfdi:Traslado Impuesto="002" Importe="999.00"/></cfdi:Traslados>
+      </cfdi:Impuestos>
+    </cfdi:Concepto>
+    <cfdi:Concepto ClaveProdServ="10101501" Cantidad="2" ClaveUnidad="H87" Descripcion="Producto dos" ValorUnitario="20.00" Importe="40.00"/>
+    <cfdi:Concepto ClaveProdServ="10101502" Cantidad="1" ClaveUnidad="H87" Descripcion="Producto tres" ValorUnitario="50.00" Importe="50.00"/>
+  </cfdi:Conceptos>
+  <cfdi:Impuestos TotalImpuestosTrasladados="16.00" TotalImpuestosRetenidos="5.00">
+    <cfdi:Retenciones>
+      <cfdi:Retencion Impuesto="001" Importe="2.00"/>
+      <cfdi:Retencion Impuesto="002" Importe="3.00"/>
+    </cfdi:Retenciones>
+    <cfdi:Traslados>
+      <cfdi:Traslado Impuesto="002" Importe="10.00"/>
+      <cfdi:Traslado Impuesto="002" Importe="6.00"/>
+    </cfdi:Traslados>
+  </cfdi:Impuestos>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital UUID="123e4567-e89b-12d3-a456-426614174000"/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

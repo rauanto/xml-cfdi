@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<c:Comprobante xmlns:c="http://www.sat.gob.mx/cfd/4" xmlns:z="http://www.sat.gob.mx/TimbreFiscalDigital" Version="4.0" Fecha="2024-06-01T00:00:00" TipoDeComprobante="I">
+  <c:Emisor Rfc="CCC010101CCC" Nombre="Emisor prefijo c"/>
+  <c:Conceptos>
+    <c:Concepto ClaveProdServ="43211500" Descripcion="Equipo" Importe="12.34"/>
+  </c:Conceptos>
+  <c:Complemento>
+    <z:TimbreFiscalDigital UUID="custom-prefix-uuid"/>
+  </c:Complemento>
+</c:Comprobante>

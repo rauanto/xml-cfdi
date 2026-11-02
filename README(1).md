@@ -14,7 +14,7 @@ Aplicación de escritorio (Rust + GPUI) que procesa un archivo ZIP con CFDI en X
 | Excel | `rust_xlsxwriter` |
 | Decimales | `rust_decimal` (nunca `f64` para dinero) |
 | Errores | `thiserror` |
-| Tests | `cargo test` + fixtures XML en `tests/fixtures/` |
+| Tests | `cargo test` + fixtures XML en `tests/fixtures/` + lectura XLSX con `calamine` |
 
 ## Flujo
 
@@ -22,8 +22,9 @@ Aplicación de escritorio (Rust + GPUI) que procesa un archivo ZIP con CFDI en X
 2. Se leen todos los `.xml` del ZIP sin importar su nombre ni subcarpeta.
 3. Cada XML se parsea; si falla, se registra en **Errores** y se continúa.
 4. Se genera una fila por concepto (CFDI con 3 conceptos = 3 filas).
-5. Se muestra la vista previa (tabla con pestañas, igual que las hojas).
-6. El usuario exporta el `.xlsx`.
+5. Se resumen importes por `ClaveProdServ + Descripción`; conceptos sin importe cuentan, pero no suman.
+6. Se genera una clasificación contable sugerida con el criterio de cada fila.
+7. El usuario exporta el `.xlsx`.
 
 ## Namespaces
 
@@ -42,22 +43,37 @@ UUID, Fecha, RFC Emisor, Nombre Emisor, RFC Receptor, Tipo de Comprobante (I/E/P
 **Concepto (una fila cada uno):**
 ClaveProdServ, Descripción, Importe.
 
-Los impuestos se toman del nodo `cfdi:Impuestos` a nivel comprobante (`TotalImpuestosTrasladados` / `TotalImpuestosRetenidos` y el desglose por código de impuesto).
+Los impuestos se toman del nodo `cfdi:Impuestos` hijo directo de `Comprobante`, por código de impuesto, y se repiten en cada fila de concepto. Si falta `TimbreFiscalDigital`, UUID queda vacío. Los tipos P y N se extraen tal como aparecen, sin tratamiento especial.
+
+## Clasificación sugerida
+
+La clasificación no es interpretación fiscal. Se evalúa en este orden y se conserva el criterio aplicado:
+
+1. Tipo N → Nómina.
+2. Descripción contiene una palabra clave de honorarios → Honorarios.
+3. Descripción contiene una palabra clave de inversión → Inversión.
+4. Tipo I con RFC propio: emisor coincide → Ingreso; receptor coincide → Gasto.
+5. Otros; el criterio explica por qué no aplicó una regla.
+
+La comparación de palabras clave ignora mayúsculas y acentos. RFC propio es opcional; sin RFC no se distingue Ingreso de Gasto. La lista editable está en `src/domain/clasificacion.rs`.
 
 ## Hojas del Excel
 
 1. **CFDI (nivel concepto)**: todos los registros, una fila por concepto.
 2. **Resumen por producto**: agrupa `ClaveProdServ + Descripción` y suma el importe.
-3. **Clasificación contable sugerida**: Ingreso / Gasto / Honorarios / Nómina / Inversión / Otros, según tipo de comprobante y palabras clave de la descripción. Es una **sugerencia**, no una interpretación fiscal.
+3. **Clasificación sugerida**: campos clave del concepto, categoría y criterio. Es una **sugerencia**, no una interpretación fiscal.
 4. **Errores**: archivo, ruta dentro del ZIP y motivo (XML inválido, sin `Comprobante`, sin UUID, etc.).
+
+Los importes se calculan con `rust_decimal`; el XLSX los guarda como celdas numéricas con formato de dos decimales (seis para tipo de cambio). Los datos ausentes quedan en celdas vacías.
 
 ## Arquitectura (hexagonal)
 
 ```
 src/
 ├── main.rs
+├── lib.rs
 ├── domain/            # Entidades y reglas puras (sin I/O)
-│   ├── cfdi.rs        # CfdiRow, ConceptoRow
+│   ├── cfdi.rs        # CfdiRow (una fila por concepto)
 │   ├── clasificacion.rs
 │   └── error.rs
 ├── application/       # Casos de uso
@@ -69,19 +85,18 @@ src/
 │   ├── xml_parser.rs  # quick-xml + namespaces
 │   └── xlsx_exporter.rs
 └── ui/                # GPUI (vistas, estado, tabla de vista previa)
-tests/fixtures/        # XML de ejemplo (3.3, 4.0, con retenciones, pago, nómina, corrupto)
+tests/
+├── parser.rs
+├── use_cases.rs
+└── fixtures/          # XML 3.3/4.0, IVA tasa 0, tipos, corruptos y namespaces
 ```
 
 La UI nunca parsea ni escribe archivos directamente: llama a los casos de uso. El procesamiento corre fuera del hilo de UI y reporta progreso.
 
-## Preguntas abiertas (resolver antes de implementar)
+## Preguntas abiertas
 
-1. **Emitidas vs. Recibidas:** el XML no indica por sí solo cuál es "tuyo". ¿Se captura el RFC propio en la app para marcar cada CFDI como emitido/recibido? ¿O la columna se omite?
-2. **"ffd":** se asume que se refiere a `tfd` (TimbreFiscalDigital). ¿Correcto?
-3. **Impuestos por fila:** los impuestos son del comprobante completo. ¿Repetirlos en cada fila de concepto (propuesto) o dejarlos solo en la primera fila de cada CFDI para no duplicar sumas?
-4. **CFDI tipo P (pagos) y N (nómina):** pueden no tener importes útiles en conceptos (los pagos traen importe 0). ¿Se extraen tal cual (propuesto)?
-5. **Hoja 1** se llama "CFDI Emitidas" pero contendrá emitidas y recibidas. ¿Renombrar a "CFDI"?
-6. **Clasificación:** ¿se usa un catálogo de palabras clave fijo (propuesto) o editable por el usuario?
+1. **Emitidas vs. Recibidas:** no hay columna por ahora. RFC propio opcional solo guía sugerencias de Ingreso/Gasto.
+2. **Clasificación:** las palabras clave son fijas en código por ahora; se puede decidir después si el catálogo debe ser editable.
 
 ## Ejecución
 

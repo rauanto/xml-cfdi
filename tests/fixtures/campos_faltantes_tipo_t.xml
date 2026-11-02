@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" TipoDeComprobante="T" SubTotal="0.00" Total="0.00">
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="78101800" Descripcion="Traslado" Importe="0.00"/>
+  </cfdi:Conceptos>
+</cfdi:Comprobante>

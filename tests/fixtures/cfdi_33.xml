@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante
+    xmlns:cfdi="http://www.sat.gob.mx/cfd/3"
+    Version="3.3"
+    Fecha="2023-12-01T10:00:00"
+    SubTotal="250.50"
+    Total="290.58"
+    TipoDeComprobante="E"
+    FormaPago="99"
+    MetodoPago="PPD"
+    Moneda="MXN">
+  <cfdi:Emisor Rfc="AAA010101AAA" Nombre="Emisor 33"/>
+  <cfdi:Receptor Rfc="BBB010101BBB" Nombre="Receptor 33" UsoCFDI="G02"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111506" Cantidad="1" ClaveUnidad="ACT" Descripcion="Servicio" ValorUnitario="250.50" Importe="250.50"/>
+  </cfdi:Conceptos>
+</cfdi:Comprobante>

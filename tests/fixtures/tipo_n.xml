@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" TipoDeComprobante="N">
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111505" Descripcion="Nómina" Importe="1000.00"/>
+  </cfdi:Conceptos>
+</cfdi:Comprobante>

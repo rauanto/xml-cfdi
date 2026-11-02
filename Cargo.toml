@@ -8,12 +8,15 @@ anyhow = "1.0.104"
 gpui = "0.2.2"
 quick-xml = "0.42.0"
 rust_decimal = "1.43.0"
-rust_xlsxwriter = "0.102.0"
+rust_xlsxwriter = { version = "0.102.0", features = ["rust_decimal"] }
 thiserror = "2.0.21"
+unicode-normalization = "0.1.26"
 zip = "9.2.2"
 
 [dev-dependencies]
+calamine = "0.38.0"
 pretty_assertions = "1.4.1"
+tempfile = "3.27.0"
 
 # xattr 0.2.3 assumes ENOATTR exists on Linux; Linux uses ENODATA.
 [patch.crates-io]
