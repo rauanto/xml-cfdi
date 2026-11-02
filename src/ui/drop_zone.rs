@@ -1,10 +1,15 @@
 //! Área de carga con botón, layout y tokens de gpuikit.
 
-use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, prelude::*};
+use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, prelude::*, px};
 use gpuikit::{
-    elements::typography::text,
-    layout::v_stack,
-    theme::{ActiveTheme, Themeable},
+    elements::{
+        badge::badge,
+        button::button,
+        typography::{h3, p},
+    },
+    layout::{h_stack, v_stack},
+    theme::{ActiveTheme, ControlSize, Themeable},
+    traits::control_sized::ControlSized,
 };
 
 use super::UiClickHandler;
@@ -34,19 +39,47 @@ impl RenderOnce for DropZone {
         v_stack()
             .id("drop-zone")
             .w_full()
-            .max_w(gpui::px(theme::DROP_ZONE_WIDTH))
-            .h(gpui::px(theme::DROP_ZONE_HEIGHT))
+            .max_w(px(theme::DROP_ZONE_WIDTH + 80.0))
             .items_center()
             .justify_center()
-            .gap_3()
-            .rounded_lg()
+            .p_8()
+            .gap_4()
+            .rounded_xl()
             .border_dashed()
-            .border_1()
+            .border_2()
             .border_color(theme.border())
             .bg(theme.surface())
             .cursor_pointer()
+            .hover(|s| s.bg(theme.surface_secondary()).border_color(theme.accent()))
             .on_click(self.on_click)
-            .child(text("Arrastra un .zip o haz clic para seleccionarlo"))
-            .child(text(self.button_label).accent())
+            .child(h3("Cargar comprobantes CFDI en ZIP"))
+            .child(
+                p("Arrastra y suelta tu archivo .zip aquí o pulsa para seleccionarlo en tu equipo.")
+                    .muted(),
+            )
+            .child(
+                button("browse-button", self.button_label)
+                    .control_size(ControlSize::Large),
+            )
+            .child(
+                h_stack()
+                    .gap_2()
+                    .mt_2()
+                    .child(
+                        badge("CFDI 3.3 / 4.0")
+                            .secondary()
+                            .control_size(ControlSize::Small),
+                    )
+                    .child(
+                        badge("Exportación Excel a 4 hojas")
+                            .secondary()
+                            .control_size(ControlSize::Small),
+                    )
+                    .child(
+                        badge("Tolerante a XMLs dañados")
+                            .secondary()
+                            .control_size(ControlSize::Small),
+                    ),
+            )
     }
 }

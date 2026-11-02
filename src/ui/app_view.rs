@@ -8,11 +8,12 @@ use std::{
 use chrono::Local;
 use gpui::{
     Context, Entity, FileDropEvent, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    PathPromptOptions, Render, Subscription, UniformListScrollHandle, Window, canvas,
+    PathPromptOptions, Render, ScrollHandle, Subscription, UniformListScrollHandle, Window, canvas,
     div, prelude::*, px,
 };
 use gpuikit::{
     elements::{
+        badge::badge,
         button::button,
         progress::progress as progress_bar,
         tabs::{TabChanged, Tabs as KitTabs},
@@ -22,7 +23,8 @@ use gpuikit::{
     },
     input::{InputState, InputStateEvent},
     layout::{h_stack, v_stack},
-    theme::{ActiveTheme, Themeable},
+    theme::{ActiveTheme, ControlSize, Themeable},
+    traits::control_sized::ControlSized,
 };
 use rust_decimal::Decimal;
 
@@ -47,8 +49,6 @@ use super::{
     tabs, theme,
     toolbar::Toolbar,
 };
-
-
 
 #[derive(Clone, Debug)]
 pub struct TablasPreparadas {
@@ -265,6 +265,7 @@ pub struct AppView {
     rfc_input: Entity<InputState>,
     tabs: Entity<KitTabs>,
     table_scroll_handles: [UniformListScrollHandle; 4],
+    table_h_scroll_handles: [ScrollHandle; 4],
     _rfc_subscription: Subscription,
     tab_subscription: Subscription,
     pending_drop: Option<PathBuf>,
@@ -275,7 +276,7 @@ pub struct AppView {
 impl AppView {
     pub fn new(cx: &mut Context<Self>, window: &mut Window) -> Self {
         let rfc_input = cx.new(InputState::new_singleline);
-        let tabs = tabs::create(cx, 0, Vista::Cfdi);
+        let tabs = tabs::create(cx, None, Vista::Cfdi);
         let appearance_subscription = cx.observe_window_appearance(window, |_, window, cx| {
             theme::follow_system_appearance(window.appearance(), cx);
             cx.notify();
@@ -298,6 +299,7 @@ impl AppView {
             rfc_input,
             tabs,
             table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
+            table_h_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
             _rfc_subscription: rfc_subscription,
             tab_subscription,
             pending_drop: None,
@@ -315,8 +317,14 @@ impl AppView {
         })
     }
 
-    fn replace_tabs(&mut self, error_count: usize, cx: &mut Context<Self>) {
-        let tabs = tabs::create(cx, error_count, self.state.vista);
+    fn replace_tabs(&mut self, cx: &mut Context<Self>) {
+        let counts = self.state.resultados.as_ref().map(|r| tabs::TabCounts {
+            cfdi: r.filas.len(),
+            resumen: r.resumen.len(),
+            clasificacion: r.clasificaciones.len(),
+            errores: r.errores.len(),
+        });
+        let tabs = tabs::create(cx, counts, self.state.vista);
         self.tab_subscription = Self::subscribe_tabs(cx, &tabs);
         self.tabs = tabs;
     }
@@ -359,7 +367,7 @@ impl AppView {
             self.state.set_error(message);
             self.pending_toast = Some((message.to_owned(), false));
         }
-        self.replace_tabs(0, cx);
+        self.replace_tabs(cx);
         cx.notify();
     }
 
@@ -415,12 +423,7 @@ impl AppView {
             }
             WorkerMessage::Complete(result, tablas) => {
                 self.state.finish_processing(result, tablas);
-                let error_count = self
-                    .state
-                    .resultados
-                    .as_ref()
-                    .map_or(0, |result| result.errores.len());
-                self.replace_tabs(error_count, cx);
+                self.replace_tabs(cx);
                 if self.state.estado == EstadoApp::Error {
                     let message = self
                         .state
@@ -613,24 +616,28 @@ impl AppView {
                 &CFDI_COLUMNS,
                 Arc::clone(&resultados.tablas.cfdi),
                 self.table_scroll_handles[0].clone(),
+                self.table_h_scroll_handles[0].clone(),
                 "cfdi-rows",
             ),
             Vista::Resumen => DataTable::new(
                 &RESUMEN_COLUMNS,
                 Arc::clone(&resultados.tablas.resumen),
                 self.table_scroll_handles[1].clone(),
+                self.table_h_scroll_handles[1].clone(),
                 "summary-rows",
             ),
             Vista::Clasificacion => DataTable::new(
                 &CLASIFICACION_COLUMNS,
                 Arc::clone(&resultados.tablas.clasificaciones),
                 self.table_scroll_handles[2].clone(),
+                self.table_h_scroll_handles[2].clone(),
                 "classification-rows",
             ),
             Vista::Errores => DataTable::new(
                 &ERROR_COLUMNS,
                 Arc::clone(&resultados.tablas.errores),
                 self.table_scroll_handles[3].clone(),
+                self.table_h_scroll_handles[3].clone(),
                 "error-rows",
             ),
         }
@@ -732,7 +739,13 @@ impl Render for AppView {
             .text_color(cx.theme().fg())
             .bg(cx.theme().bg())
             .child(Toolbar::new(
+                self.state
+                    .ruta_zip
+                    .as_deref()
+                    .and_then(Path::file_name)
+                    .map(|n| n.to_string_lossy().to_string()),
                 is_exportable,
+                cx.listener(|this, _, _, cx| this.open_zip_dialog(cx)),
                 cx.listener(|this, _, _, cx| this.choose_export_path(cx)),
             ))
             .child(self.render_options(cx))
@@ -743,7 +756,7 @@ impl Render for AppView {
             .when(state.resultados.is_some(), |element| {
                 element
                     .child(Metrics::new(state.clone()))
-                    .child(self.tabs.clone())
+                    .child(div().px_6().py_1().child(self.tabs.clone()))
             })
             .child(
                 v_stack()
@@ -756,7 +769,7 @@ impl Render for AppView {
                     .px_6()
                     .py_2()
                     .when(state.resultados.is_some(), |element| {
-                        element.items_start().justify_start().px_0().py_0()
+                        element.items_start().justify_start().px_6().py_2()
                     })
                     .child(self.render_content(cx)),
             )
@@ -783,29 +796,68 @@ impl AppView {
                 self.state.estado,
                 EstadoApp::ZipCargado | EstadoApp::Resultados
             );
-        let validation = validar_rfc(&self.state.rfc_propio)
-            .unwrap_or("RFC opcional; se normaliza a mayúsculas");
+        let is_processing = self.state.estado == EstadoApp::Procesando;
+        let validation = validar_rfc(&self.state.rfc_propio);
+        let has_rfc = !self.state.rfc_propio.trim().is_empty();
+
+        let zip_label = self
+            .state
+            .ruta_zip
+            .as_deref()
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().to_string());
+
         h_stack()
             .w_full()
-            .flex()
             .items_center()
-            .gap_3()
+            .justify_between()
+            .gap_4()
             .px_6()
             .py_2()
             .border_b_1()
             .border_color(cx.theme().border())
             .bg(cx.theme().surface())
-            .child(text("RFC propio (opcional)").muted())
             .child(
-                div()
-                    .w(px(224.))
-                    .child(text_field(&self.rfc_input, cx).placeholder("RFC")),
+                h_stack()
+                    .gap_3()
+                    .items_center()
+                    .child(text("RFC propio (opcional):").small().muted())
+                    .child(
+                        div()
+                            .w(px(200.))
+                            .child(text_field(&self.rfc_input, cx).placeholder("Ej. AAA010101AAA")),
+                    )
+                    .child(if let Some(err) = validation {
+                        badge(err).destructive().control_size(ControlSize::Small)
+                    } else if has_rfc {
+                        badge("RFC válido")
+                            .secondary()
+                            .control_size(ControlSize::Small)
+                    } else {
+                        badge("Opcional: guía Ingreso/Gasto")
+                            .outline()
+                            .control_size(ControlSize::Small)
+                    }),
             )
-            .child(div().flex_1().truncate().child(small(validation).muted()))
             .child(
-                button("process-button", "Procesar")
-                    .disabled(!enabled)
-                    .on_click(cx.listener(|this, _, _, cx| this.process_zip(cx))),
+                h_stack()
+                    .gap_3()
+                    .items_center()
+                    .when_some(zip_label, |stack, name| {
+                        stack.child(small(format!("Listo: {}", name)).muted())
+                    })
+                    .child(
+                        button(
+                            "process-button",
+                            if is_processing {
+                                "Procesando…"
+                            } else {
+                                "Procesar ZIP"
+                            },
+                        )
+                        .disabled(!enabled || is_processing)
+                        .on_click(cx.listener(|this, _, _, cx| this.process_zip(cx))),
+                    ),
             )
     }
 }
@@ -854,7 +906,7 @@ pub fn format_decimal(value: Decimal, decimals: usize) -> String {
     grouped
 }
 
-fn format_integer(value: usize) -> String {
+pub fn format_integer(value: usize) -> String {
     let mut result = String::new();
     for (index, character) in value.to_string().chars().rev().enumerate() {
         if index > 0 && index % 3 == 0 {

@@ -2,11 +2,16 @@
 
 use std::path::PathBuf;
 
-use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, div, prelude::*};
+use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, prelude::*};
 use gpuikit::{
-    elements::{button::button, typography::text},
+    elements::{
+        badge::badge,
+        button::button,
+        typography::{small, text},
+    },
     layout::h_stack,
-    theme::{ActiveTheme, Themeable},
+    theme::{ActiveTheme, ControlSize, Themeable},
+    traits::control_sized::ControlSized,
 };
 
 use super::UiClickHandler;
@@ -42,23 +47,44 @@ impl RenderOnce for StatusBar {
             .path
             .as_deref()
             .map(|path| path.display().to_string())
-            .unwrap_or_default();
+            .unwrap_or_else(|| "Ningún archivo cargado".to_owned());
 
         h_stack()
             .w_full()
-            .h(gpui::rems(1.75))
+            .h(gpui::rems(2.2))
             .items_center()
-            .gap_3()
+            .justify_between()
             .px_6()
             .border_t_1()
             .border_color(theme.border())
             .bg(theme.surface())
             .text_color(theme.fg_muted())
-            .child(text(path).small().truncate(true))
-            .child(div().flex_1())
-            .when_some(self.exported, |bar, _| {
-                bar.child(button("reveal-export-folder", "Abrir carpeta").on_click(self.on_reveal))
-            })
-            .child(text(self.status).small().truncate(true))
+            .child(
+                h_stack()
+                    .gap_2()
+                    .items_center()
+                    .child(small("Archivo:").muted())
+                    .child(text(path).small().truncate(true)),
+            )
+            .child(
+                small("Atajos: Ctrl+O (Abrir) · Ctrl+E (Exportar) · Ctrl+1..4 (Pestañas)").muted(),
+            )
+            .child(
+                h_stack()
+                    .gap_2()
+                    .items_center()
+                    .when_some(self.exported, |bar, _| {
+                        bar.child(
+                            button("reveal-export-folder", "Abrir carpeta")
+                                .control_size(ControlSize::Small)
+                                .on_click(self.on_reveal),
+                        )
+                    })
+                    .child(
+                        badge(self.status)
+                            .outline()
+                            .control_size(ControlSize::Small),
+                    ),
+            )
     }
 }

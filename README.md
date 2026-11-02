@@ -95,11 +95,14 @@ La UI nunca parsea ni escribe archivos directamente: llama a los casos de uso. E
 
 ## Interfaz de escritorio
 
-La ventana abre a 1200 × 760 px y admite un mínimo de 900 × 560 px. La interfaz usa componentes de GPUKit para botones, campo de texto, pestañas, progreso, notificaciones, tipografía y layout. La apariencia del sistema selecciona entre los temas claro y oscuro Gruvbox incluidos en GPUKit.
+La ventana abre a 1200 × 760 px y admite un mínimo de 900 × 560 px. La interfaz usa componentes de GPUKit para botones, campo de texto, pestañas, métricas, tarjetas, badges, progreso, notificaciones, tipografía y layout. La apariencia del sistema selecciona entre los temas claro y oscuro Gruvbox incluidos en GPUKit.
 
-Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana. Las vistas previas usan el componente `Table` de GPUKit, con encabezado fijo, cuerpo desplazable y columnas con alineación por tipo de dato. Se quitó el desplazamiento horizontal personalizado y sus controles.
+Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana. 
 
-GPUKit 0.9.0 no virtualiza sus tablas: el componente renderiza todas las filas recibidas. Con conjuntos muy grandes (por ejemplo, 10,000+ filas), la vista previa puede ralentizarse; el procesamiento en segundo plano continúa separado del hilo de UI, pero la tabla no mantiene el rendimiento de una lista virtualizada.
+Las vistas previas cuentan con:
+- **Ajuste dinámico de columnas**: en tablas con pocas columnas (Resumen y Errores), las columnas principales se expanden automáticamente para aprovechar el 100% del ancho de la ventana.
+- **Desplazamiento horizontal fluido**: en tablas anchas (CFDI con 21 columnas y Clasificación sugerida), el usuario puede desplazarse horizontalmente mediante el trackpad, `Mayús + rueda del ratón` o usando los botones de navegación rápida de la barra inferior de la tabla (`⇤ Inicio`, `◀ Deslizar`, `Deslizar ▶`, `Final ⇥`).
+- **Virtualización vertical de alto rendimiento**: implementada con `uniform_list` y pre-formateo en `SharedString`, manteniendo 60 fps y respuesta inmediata incluso con miles de filas.
 
 Atajos:
 
@@ -116,7 +119,7 @@ python3 tools/generate_load_test_zip.py /tmp/cfdi_5000.zip --count 5000
 cargo run
 ```
 
-Abre `/tmp/cfdi_5000.zip`, pulsa **Procesar** y verifica que la ventana siga respondiendo mientras avanza la barra de progreso. La tabla de GPUKit dibuja las filas completas, así que observa también el rendimiento al mostrar resultados grandes.
+Abre `/tmp/cfdi_5000.zip`, pulsa **Procesar** y verifica que la ventana siga respondiendo mientras avanza la barra de progreso y que las tablas se desplacen suavemente de manera vertical y horizontal.
 
 La prueba automatizada `cargo test procesar_zip_procesa_5000_xml_sin_perder_filas` verifica que el caso de uso procese 5,000 XML y conserve todas sus filas.
 
