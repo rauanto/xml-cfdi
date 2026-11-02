@@ -311,7 +311,9 @@ impl RenderOnce for DataTable {
                     )
                     .child(small(format!("{} filas", format_integer(row_count))).muted())
                     .when(is_scrollable, |stack| {
-                        stack.child(small("· Desliza con Shift + rueda o usa los botones:").muted())
+                        stack.child(
+                            small("· Rueda: vertical | Mayús + rueda o botones: deslizar").muted(),
+                        )
                     })
                     .when(!is_scrollable, |stack| {
                         stack.child(small("· Ajustado al ancho completo").muted())
@@ -401,8 +403,32 @@ impl RenderOnce for DataTable {
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
-                    .overflow_x_scroll()
+                    .overflow_hidden()
                     .track_scroll(&horizontal_scroll)
+                    .when(is_scrollable, |el| {
+                        let h_scroll = horizontal_scroll.clone();
+                        let max_scroll = (total_width - available_width).max(0.0);
+                        el.on_scroll_wheel(move |event, window, cx| {
+                            let delta = event.delta.pixel_delta(window.line_height());
+                            // Solo si el usuario presiona Mayús o usa desplazamiento horizontal del trackpad
+                            if event.modifiers.shift || delta.x != px(0.) {
+                                let h_delta = if delta.x != px(0.) { delta.x } else { delta.y };
+                                let cur_x = h_scroll.offset().x;
+                                let limit = if h_scroll.max_offset().x > px(0.) {
+                                    -h_scroll.max_offset().x
+                                } else {
+                                    px(-max_scroll)
+                                };
+                                let new_x = (cur_x + h_delta).clamp(limit, px(0.));
+                                h_scroll.set_offset(point(new_x, h_scroll.offset().y));
+                                cx.stop_propagation();
+                                window.refresh();
+                            }
+                            // Si es scroll vertical con la rueda del ratón normal (sin Mayús),
+                            // dejamos que el evento pase libremente a uniform_list para desplazarse
+                            // hacia abajo y arriba de forma natural.
+                        })
+                    })
                     .child(
                         div()
                             .w(px(total_width))

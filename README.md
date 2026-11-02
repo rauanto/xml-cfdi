@@ -101,7 +101,7 @@ Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RF
 
 Las vistas previas cuentan con:
 - **Ajuste dinámico de columnas**: en tablas con pocas columnas (Resumen y Errores), las columnas principales se expanden automáticamente para aprovechar el 100% del ancho de la ventana.
-- **Desplazamiento horizontal fluido**: en tablas anchas (CFDI con 21 columnas y Clasificación sugerida), el usuario puede desplazarse horizontalmente mediante el trackpad, `Mayús + rueda del ratón` o usando los botones de navegación rápida de la barra inferior de la tabla (`⇤ Inicio`, `◀ Deslizar`, `Deslizar ▶`, `Final ⇥`).
+- **Desplazamiento horizontal fluido**: en tablas anchas (CFDI con 21 columnas y Clasificación sugerida), el usuario puede desplazarse horizontalmente mediante el trackpad, `Mayús + rueda del ratón` o usando los botones de navegación rápida de la barra inferior de la tabla (`⇤ Inicio`, `◀ Deslizar`, `Deslizar ▶`, `Final ⇥`). El scroll normal con la rueda del ratón se desplaza verticalmente por las filas.
 - **Virtualización vertical de alto rendimiento**: implementada con `uniform_list` y pre-formateo en `SharedString`, manteniendo 60 fps y respuesta inmediata incluso con miles de filas.
 
 Atajos:
