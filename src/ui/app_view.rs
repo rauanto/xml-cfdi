@@ -1,5 +1,4 @@
 //! Estado único de la aplicación y composición de sus componentes GPUI.
-
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -9,7 +8,7 @@ use std::{
 use chrono::Local;
 use gpui::{
     Context, Entity, FileDropEvent, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    PathPromptOptions, Render, ScrollHandle, Subscription, UniformListScrollHandle, Window, canvas,
+    PathPromptOptions, Render, Subscription, UniformListScrollHandle, Window, canvas,
     div, prelude::*, px,
 };
 use gpuikit::{
@@ -38,13 +37,41 @@ use crate::{
 };
 
 use super::{
-    data_table::{CFDI_COLUMNS, CLASIFICACION_COLUMNS, DataTable, ERROR_COLUMNS, RESUMEN_COLUMNS},
+    data_table::{
+        CFDI_COLUMNS, CLASIFICACION_COLUMNS, DataTable, ERROR_COLUMNS, Fila, RESUMEN_COLUMNS,
+        construir_filas,
+    },
     drop_zone::DropZone,
     metrics::Metrics,
     status_bar::StatusBar,
     tabs, theme,
     toolbar::Toolbar,
 };
+
+
+
+#[derive(Clone, Debug)]
+pub struct TablasPreparadas {
+    pub cfdi: Arc<Vec<Fila>>,
+    pub resumen: Arc<Vec<Fila>>,
+    pub clasificaciones: Arc<Vec<Fila>>,
+    pub errores: Arc<Vec<Fila>>,
+}
+
+impl TablasPreparadas {
+    pub fn desde(r: &ResultadoProceso) -> Self {
+        Self {
+            cfdi: construir_filas(r.filas.as_slice(), CFDI_COLUMNS.len(), cfdi_cell),
+            resumen: construir_filas(r.resumen.as_slice(), RESUMEN_COLUMNS.len(), resumen_cell),
+            clasificaciones: construir_filas(
+                r.clasificaciones.as_slice(),
+                CLASIFICACION_COLUMNS.len(),
+                clasificacion_cell,
+            ),
+            errores: construir_filas(r.errores.as_slice(), ERROR_COLUMNS.len(), error_cell),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Vista {
@@ -91,17 +118,19 @@ pub struct ResultadosVista {
     pub resumen: Arc<Vec<crate::application::resumen::ResumenProducto>>,
     pub clasificaciones: Arc<Vec<crate::domain::clasificacion::FilaClasificada>>,
     pub errores: Arc<Vec<crate::domain::error::ErrorArchivo>>,
+    pub tablas: TablasPreparadas,
     pub total_xml_leidos: usize,
     pub total_cfdi_ok: usize,
 }
 
-impl From<ResultadoProceso> for ResultadosVista {
-    fn from(resultado: ResultadoProceso) -> Self {
+impl ResultadosVista {
+    fn new(resultado: ResultadoProceso, tablas: TablasPreparadas) -> Self {
         Self {
             filas: Arc::new(resultado.filas),
             resumen: Arc::new(resultado.resumen),
             clasificaciones: Arc::new(resultado.clasificaciones),
             errores: Arc::new(resultado.errores),
+            tablas,
             total_xml_leidos: resultado.total_xml_leidos,
             total_cfdi_ok: resultado.total_cfdi_ok,
         }
@@ -172,7 +201,7 @@ impl AppState {
         self.total = total;
     }
 
-    pub fn finish_processing(&mut self, resultado: ResultadoProceso) {
+    pub fn finish_processing(&mut self, resultado: ResultadoProceso, tablas: TablasPreparadas) {
         if resultado.total_xml_leidos == 0 {
             let mensaje = if resultado.errores.is_empty() {
                 "El ZIP no contiene archivos .xml.".to_owned()
@@ -182,7 +211,7 @@ impl AppState {
             self.set_error(mensaje);
             return;
         }
-        self.resultados = Some(Arc::new(resultado.into()));
+        self.resultados = Some(Arc::new(ResultadosVista::new(resultado, tablas)));
         self.estado = EstadoApp::Resultados;
         self.procesados = self.total;
         self.mensaje_error = None;
@@ -236,7 +265,6 @@ pub struct AppView {
     rfc_input: Entity<InputState>,
     tabs: Entity<KitTabs>,
     table_scroll_handles: [UniformListScrollHandle; 4],
-    table_horizontal_scroll_handles: [ScrollHandle; 4],
     _rfc_subscription: Subscription,
     tab_subscription: Subscription,
     pending_drop: Option<PathBuf>,
@@ -270,7 +298,6 @@ impl AppView {
             rfc_input,
             tabs,
             table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
-            table_horizontal_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
             _rfc_subscription: rfc_subscription,
             tab_subscription,
             pending_drop: None,
@@ -361,13 +388,14 @@ impl AppView {
                         let _ = sender.send_blocking(WorkerMessage::Progress(processed, total));
                     }
                 });
-                let _ = sender.send_blocking(WorkerMessage::Complete(result));
+                let tablas = TablasPreparadas::desde(&result);
+                let _ = sender.send_blocking(WorkerMessage::Complete(result, tablas));
             })
             .detach();
 
         cx.spawn(async move |this, cx| {
             while let Ok(message) = receiver.recv().await {
-                let complete = matches!(message, WorkerMessage::Complete(_));
+                let complete = matches!(message, WorkerMessage::Complete(..));
                 if this
                     .update(cx, |this, cx| this.handle_worker_message(message, cx))
                     .is_err()
@@ -385,8 +413,8 @@ impl AppView {
             WorkerMessage::Progress(processed, total) => {
                 self.state.set_progress(processed, total);
             }
-            WorkerMessage::Complete(result) => {
-                self.state.finish_processing(result);
+            WorkerMessage::Complete(result, tablas) => {
+                self.state.finish_processing(result, tablas);
                 let error_count = self
                     .state
                     .resultados
@@ -583,47 +611,36 @@ impl AppView {
         match self.state.vista {
             Vista::Cfdi => DataTable::new(
                 &CFDI_COLUMNS,
-                Arc::clone(&resultados.filas),
-                cfdi_cell,
+                Arc::clone(&resultados.tablas.cfdi),
                 self.table_scroll_handles[0].clone(),
-                self.table_horizontal_scroll_handles[0].clone(),
                 "cfdi-rows",
-            )
-            .into_any_element(),
+            ),
             Vista::Resumen => DataTable::new(
                 &RESUMEN_COLUMNS,
-                Arc::clone(&resultados.resumen),
-                resumen_cell,
+                Arc::clone(&resultados.tablas.resumen),
                 self.table_scroll_handles[1].clone(),
-                self.table_horizontal_scroll_handles[1].clone(),
                 "summary-rows",
-            )
-            .into_any_element(),
+            ),
             Vista::Clasificacion => DataTable::new(
                 &CLASIFICACION_COLUMNS,
-                Arc::clone(&resultados.clasificaciones),
-                clasificacion_cell,
+                Arc::clone(&resultados.tablas.clasificaciones),
                 self.table_scroll_handles[2].clone(),
-                self.table_horizontal_scroll_handles[2].clone(),
                 "classification-rows",
-            )
-            .into_any_element(),
+            ),
             Vista::Errores => DataTable::new(
                 &ERROR_COLUMNS,
-                Arc::clone(&resultados.errores),
-                error_cell,
+                Arc::clone(&resultados.tablas.errores),
                 self.table_scroll_handles[3].clone(),
-                self.table_horizontal_scroll_handles[3].clone(),
                 "error-rows",
-            )
-            .into_any_element(),
+            ),
         }
+        .into_any_element()
     }
 }
 
 enum WorkerMessage {
     Progress(usize, usize),
-    Complete(ResultadoProceso),
+    Complete(ResultadoProceso, TablasPreparadas),
 }
 
 impl Render for AppView {
@@ -963,14 +980,16 @@ mod tests {
         assert_eq!(state.estado, EstadoApp::ZipCargado);
         assert!(state.start_processing());
         assert_eq!(state.estado, EstadoApp::Procesando);
-        state.finish_processing(ResultadoProceso {
+        let resultado = ResultadoProceso {
             filas: Vec::new(),
             resumen: Vec::new(),
             clasificaciones: Vec::new(),
             errores: Vec::new(),
             total_xml_leidos: 1,
             total_cfdi_ok: 1,
-        });
+        };
+        let tablas = TablasPreparadas::desde(&resultado);
+        state.finish_processing(resultado, tablas);
         assert_eq!(state.estado, EstadoApp::Resultados);
         assert_eq!(
             state.metric_text(),

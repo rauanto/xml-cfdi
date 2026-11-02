@@ -1,10 +1,16 @@
 //! Adaptador de las cuatro vistas al componente Table de gpuikit.
+//!
+//! Rendimiento de scroll:
+//! - Las filas se formatean UNA vez (`construir_filas`) y se guardan como
+//!   `SharedString` (clonar = incrementar un contador, sin copiar texto).
+//!   El render ya no formatea Decimals ni reserva `String` por celda.
+//! - Virtualización vertical con `uniform_list`; no hay scroll horizontal.
 
 use std::sync::Arc;
 
 use gpui::{
-    IntoElement, ParentElement, RenderOnce, ScrollHandle, StatefulInteractiveElement,
-    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    IntoElement, ParentElement, RenderOnce, SharedString, UniformListScrollHandle, Window, div,
+    prelude::*, px, uniform_list,
 };
 use gpuikit::theme::{ActiveTheme, Themeable};
 
@@ -21,6 +27,29 @@ pub struct Columna {
     pub titulo: &'static str,
     pub ancho: f32,
     pub alineacion: Alineacion,
+}
+
+/// Fila ya formateada: un texto por columna.
+pub type Fila = Box<[SharedString]>;
+
+/// Formatea todas las filas una sola vez. Llamar al recibir resultados
+/// (idealmente en una tarea en segundo plano), NUNCA dentro de `render`.
+pub fn construir_filas<T>(
+    items: &[T],
+    ncols: usize,
+    cell: impl Fn(&T, usize) -> String,
+) -> Arc<Vec<Fila>> {
+    Arc::new(
+        items
+            .iter()
+            .map(|item| {
+                (0..ncols)
+                    .map(|c| SharedString::from(cell(item, c)))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+            })
+            .collect(),
+    )
 }
 
 pub const CFDI_COLUMNS: [Columna; 21] = [
@@ -85,52 +114,63 @@ const fn col_r(titulo: &'static str, ancho: f32) -> Columna {
     }
 }
 
+fn celda(column: &Columna, texto: SharedString) -> impl IntoElement {
+    let mut el = div()
+        .flex_shrink_0()
+        .w(px(column.ancho))
+        .h_full()
+        .flex()
+        .items_center()
+        .px(px(8.))
+        .truncate(); // ya incluye overflow_hidden + ellipsis + nowrap
+    if matches!(column.alineacion, Alineacion::Derecha) {
+        el = el.justify_end().text_right();
+    }
+    el.child(texto)
+}
+
 #[derive(IntoElement)]
-pub struct DataTable<T: 'static> {
+pub struct DataTable {
     columns: &'static [Columna],
-    rows: Arc<Vec<T>>,
-    cell: fn(&T, usize) -> String,
+    rows: Arc<Vec<Fila>>,
     scroll_handle: UniformListScrollHandle,
-    horizontal_scroll: ScrollHandle,
     list_id: &'static str,
 }
 
-impl<T: 'static> DataTable<T> {
+impl DataTable {
     pub fn new(
         columns: &'static [Columna],
-        rows: Arc<Vec<T>>,
-        cell: fn(&T, usize) -> String,
+        rows: Arc<Vec<Fila>>,
         scroll_handle: UniformListScrollHandle,
-        horizontal_scroll: ScrollHandle,
         list_id: &'static str,
     ) -> Self {
         Self {
             columns,
             rows,
-            cell,
             scroll_handle,
-            horizontal_scroll,
             list_id,
         }
     }
 }
 
-impl<T: 'static> RenderOnce for DataTable<T> {
+impl RenderOnce for DataTable {
     fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
-        let columns = self.columns;
-        let rows = self.rows;
-        let cell = self.cell;
-        let scroll_handle = self.scroll_handle;
-        let horizontal_scroll = self.horizontal_scroll;
-        let list_id = self.list_id;
+        let Self {
+            columns,
+            rows,
+            scroll_handle,
+            list_id,
+        } = self;
+
         let max_height = (window.bounds().size.height - px(280.)).max(px(160.));
         let total_width = columns.iter().map(|column| column.ancho).sum::<f32>();
-        let theme = cx.theme();
-        let border = theme.border();
-        let surface = theme.surface();
-        let foreground = theme.fg();
-        let muted_foreground = theme.fg_muted();
-        let row_hover = theme.surface_tertiary();
+
+        let t = cx.theme();
+        let border = t.border();
+        let surface = t.surface();
+        let foreground = t.fg();
+        let muted_foreground = t.fg_muted();
+        let row_hover = t.surface_tertiary();
 
         let body = if rows.is_empty() {
             div()
@@ -146,7 +186,7 @@ impl<T: 'static> RenderOnce for DataTable<T> {
             uniform_list(list_id, rows.len(), move |range, _, _| {
                 range
                     .map(|index| {
-                        let item = &rows[index];
+                        let fila = &rows[index];
                         div()
                             .id(("data-row", index))
                             .flex()
@@ -158,21 +198,12 @@ impl<T: 'static> RenderOnce for DataTable<T> {
                             .text_size(px(13.))
                             .text_color(foreground)
                             .hover(|style| style.bg(row_hover))
-                            .children(columns.iter().enumerate().map(|(column_index, column)| {
-                                let mut cell_element = div()
-                                    .flex_shrink_0()
-                                    .w(px(column.ancho))
-                                    .h_full()
-                                    .flex()
-                                    .items_center()
-                                    .px(px(8.))
-                                    .whitespace_nowrap()
-                                    .truncate();
-                                if matches!(column.alineacion, Alineacion::Derecha) {
-                                    cell_element = cell_element.justify_end().text_right();
-                                }
-                                cell_element.child(cell(item, column_index))
-                            }))
+                            .children(
+                                columns
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, column)| celda(column, fila[i].clone())),
+                            )
                     })
                     .collect::<Vec<_>>()
             })
@@ -192,32 +223,18 @@ impl<T: 'static> RenderOnce for DataTable<T> {
             .bg(surface)
             .text_size(px(12.))
             .text_color(muted_foreground)
-            .children(columns.iter().map(|column| {
-                let mut header_cell = div()
-                    .flex_shrink_0()
-                    .w(px(column.ancho))
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .px(px(8.))
-                    .whitespace_nowrap()
-                    .truncate();
-                if matches!(column.alineacion, Alineacion::Derecha) {
-                    header_cell = header_cell.justify_end().text_right();
-                }
-                header_cell.child(column.titulo)
-            }));
+            .children(
+                columns
+                    .iter()
+                    .map(|column| celda(column, SharedString::from(column.titulo))),
+            );
 
         div()
-            .id("data-table-horizontal-scroll")
             .w_full()
             .h_full()
             .min_w_0()
             .min_h_0()
             .max_h(max_height)
-            .overflow_x_scroll()
-            .scrollbar_width(px(8.))
-            .track_scroll(&horizontal_scroll)
             .bg(surface)
             .child(
                 div()
