@@ -2,10 +2,11 @@
 
 use std::path::PathBuf;
 
-use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, prelude::*};
+use gpui::{
+    App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, div, prelude::*, rems,
+};
 use gpuikit::{
     elements::{
-        badge::badge,
         button::button,
         typography::{small, text},
     },
@@ -54,25 +55,35 @@ impl RenderOnce for StatusBar {
             .h(gpui::rems(2.2))
             .items_center()
             .justify_between()
-            .px_6()
+            .gap_4()
+            .px_4()
             .border_t_1()
             .border_color(theme.border())
-            .bg(theme.surface())
+            .bg(theme.surface_secondary())
             .text_color(theme.fg_muted())
             .child(
                 h_stack()
-                    .gap_2()
+                    .gap_1()
+                    .flex_1()
+                    .min_w_0()
+                    .max_w(rems(24.))
                     .items_center()
-                    .child(small("Archivo:").muted())
+                    .child(small("ZIP").muted())
                     .child(text(path).small().truncate(true)),
             )
             .child(
-                small("Atajos: Ctrl+O (Abrir) · Ctrl+E (Exportar) · Ctrl+1..4 (Pestañas)").muted(),
+                div().max_w(rems(30.)).min_w_0().child(
+                    text("Ctrl/Cmd+O Abrir · Ctrl/Cmd+E Exportar · Ctrl/Cmd+1–4 Pestañas")
+                        .small()
+                        .muted()
+                        .truncate(true),
+                ),
             )
             .child(
                 h_stack()
-                    .gap_2()
+                    .gap_3()
                     .items_center()
+                    .flex_shrink_0()
                     .when_some(self.exported, |bar, _| {
                         bar.child(
                             button("reveal-export-folder", "Abrir carpeta")
@@ -81,9 +92,9 @@ impl RenderOnce for StatusBar {
                         )
                     })
                     .child(
-                        badge(self.status)
-                            .outline()
-                            .control_size(ControlSize::Small),
+                        div()
+                            .max_w(rems(22.))
+                            .child(text(self.status).small().muted().truncate(true)),
                     ),
             )
     }

@@ -19,7 +19,7 @@ use gpuikit::{
         tabs::{TabChanged, Tabs as KitTabs},
         text_field::text_field,
         toast::ToastExt,
-        typography::{small, text},
+        typography::{h3, small, text},
     },
     input::{InputState, InputStateEvent},
     layout::{h_stack, v_stack},
@@ -304,12 +304,15 @@ pub struct AppView {
     config_repository: TomlConfigRepository,
     table_scroll_handles: [UniformListScrollHandle; 4],
     table_h_scroll_handles: [ScrollHandle; 4],
+    settings_scroll: ScrollHandle,
     last_config_snapshot: AppConfig,
     config_save_generation: u64,
     config_save_status: ConfigSaveStatus,
+    confirm_restore_all: bool,
     _rfc_subscription: Subscription,
     _excel_format_subscription: Subscription,
     _shortcut_subscriptions: [Subscription; 5],
+    _config_observer: Subscription,
     tab_subscription: Subscription,
     pending_drop: Option<PathBuf>,
     pending_toast: Option<(String, bool)>,
@@ -371,7 +374,7 @@ impl AppView {
                     } else {
                         Some(value)
                     };
-                    cx.notify();
+                    this.config_changed(cx);
                 }
             });
         let excel_format_subscription = cx.subscribe(
@@ -385,7 +388,7 @@ impl AppView {
                     } else {
                         trimmed.to_owned()
                     };
-                    cx.notify();
+                    this.config_changed(cx);
                 }
             },
         );
@@ -403,11 +406,12 @@ impl AppView {
                         _ => return,
                     };
                     *current = value;
-                    cx.notify();
+                    this.config_changed(cx);
                 }
             })
         });
         let tab_subscription = Self::subscribe_tabs(cx, &tabs);
+        let config_observer = cx.observe_self(|this, cx| this.schedule_config_save(cx));
         let last_config_snapshot = state.config.clone();
         Self {
             state,
@@ -418,12 +422,15 @@ impl AppView {
             config_repository,
             table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
             table_h_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
+            settings_scroll: ScrollHandle::new(),
             last_config_snapshot,
             config_save_generation: 0,
             config_save_status: ConfigSaveStatus::Saved,
+            confirm_restore_all: false,
             _rfc_subscription: rfc_subscription,
             _excel_format_subscription: excel_format_subscription,
             _shortcut_subscriptions: shortcut_subscriptions,
+            _config_observer: config_observer,
             tab_subscription,
             pending_drop: None,
             pending_toast: None,
@@ -694,15 +701,23 @@ impl AppView {
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.state.settings_open = true;
         self.state.settings_section = SettingsSection::General;
+        self.settings_scroll.set_offset(gpui::point(px(0.), px(0.)));
+        cx.notify();
+    }
+
+    fn select_settings_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        self.state.settings_section = section;
+        self.settings_scroll.set_offset(gpui::point(px(0.), px(0.)));
         cx.notify();
     }
 
     fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.state.settings_open = false;
+        self.confirm_restore_all = false;
         cx.notify();
     }
 
-    fn restore_section_defaults(&mut self) {
+    fn restore_section_defaults(&mut self, cx: &mut Context<Self>) {
         match self.state.settings_section {
             SettingsSection::General => {
                 self.state.config.general = crate::domain::config::GeneralConfig::default()
@@ -731,13 +746,29 @@ impl AppView {
             }
         }
         self.state.sync_rfc_from_config();
+        self.sync_config_inputs(cx);
         self.pending_toast = Some(("Sección restaurada".to_owned(), true));
+        self.config_changed(cx);
     }
 
-    fn restore_all_defaults(&mut self) {
+    fn restore_all_defaults(&mut self, cx: &mut Context<Self>) {
         self.state.config = AppConfig::default();
         self.state.sync_rfc_from_config();
+        self.sync_config_inputs(cx);
+        self.confirm_restore_all = false;
         self.pending_toast = Some(("Configuración restaurada".to_owned(), true));
+        self.config_changed(cx);
+    }
+
+    fn sync_config_inputs(&mut self, cx: &mut Context<Self>) {
+        let rfc = self.state.rfc_propio.clone();
+        self.rfc_input
+            .update(cx, |input, cx| input.set_content_silent(rfc, cx));
+
+        let filename_format = self.state.config.excel.formato_nombre_archivo.clone();
+        self.excel_format_input.update(cx, |input, cx| {
+            input.set_content_silent(filename_format, cx)
+        });
     }
 
     fn save_config(&mut self, cx: &mut Context<Self>) {
@@ -820,6 +851,10 @@ impl AppView {
         .detach();
     }
 
+    fn config_changed(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
     fn render_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         match self.state.estado {
             EstadoApp::Vacio => DropZone::new(
@@ -828,9 +863,75 @@ impl AppView {
             )
             .into_any_element(),
             EstadoApp::ZipCargado => v_stack()
+                .max_w(px(theme::DROP_ZONE_WIDTH))
                 .items_center()
                 .justify_center()
-                .gap_4()
+                .gap_3()
+                .p_6()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border())
+                .bg(cx.theme().surface())
+                .child(h3("ZIP listo para procesar"))
+                .child(
+                    div()
+                        .max_w(px(theme::DROP_ZONE_WIDTH - 48.))
+                        .text_center()
+                        .child(
+                            text(
+                                self.state
+                                    .ruta_zip
+                                    .as_deref()
+                                    .and_then(Path::file_name)
+                                    .map(|name| name.to_string_lossy().to_string())
+                                    .unwrap_or_default(),
+                            )
+                            .small()
+                            .muted()
+                            .truncate(true),
+                        ),
+                )
+                .child(
+                    text("Pulsa «Procesar ZIP» para revisar los comprobantes.")
+                        .small()
+                        .muted(),
+                )
+                .child(
+                    button("replace-zip", "Cambiar ZIP…")
+                        .on_click(cx.listener(|this, _, _, cx| this.open_zip_dialog(cx))),
+                )
+                .into_any_element(),
+            EstadoApp::Error => v_stack()
+                .max_w(px(theme::DROP_ZONE_WIDTH))
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .p_6()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border())
+                .bg(cx.theme().surface())
+                .child(h3("No se pudo procesar el ZIP"))
+                .child(
+                    div()
+                        .max_w(px(theme::DROP_ZONE_WIDTH - 48.))
+                        .text_center()
+                        .child(
+                            text(self.state.mensaje_error.clone().unwrap_or_default())
+                                .small()
+                                .destructive(),
+                        ),
+                )
+                .child(
+                    button("replace-zip-after-error", "Elegir otro ZIP…")
+                        .on_click(cx.listener(|this, _, _, cx| this.open_zip_dialog(cx))),
+                )
+                .into_any_element(),
+            EstadoApp::Procesando => v_stack()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .child(h3("Procesando comprobantes"))
                 .child(
                     text(
                         self.state
@@ -840,26 +941,11 @@ impl AppView {
                             .map(|name| name.to_string_lossy().to_string())
                             .unwrap_or_default(),
                     )
+                    .small()
                     .muted(),
                 )
-                .child(DropZone::new(
-                    "Seleccionar otro ZIP",
-                    cx.listener(|this, _, _, cx| this.open_zip_dialog(cx)),
-                ))
                 .into_any_element(),
-            EstadoApp::Error => v_stack()
-                .items_center()
-                .justify_center()
-                .gap_4()
-                .child(text(self.state.mensaje_error.clone().unwrap_or_default()).destructive())
-                .child(DropZone::new(
-                    "Seleccionar otro ZIP",
-                    cx.listener(|this, _, _, cx| this.open_zip_dialog(cx)),
-                ))
-                .into_any_element(),
-            EstadoApp::Procesando | EstadoApp::Resultados => {
-                self.render_preview().into_any_element()
-            }
+            EstadoApp::Resultados => self.render_preview().into_any_element(),
         }
     }
 
@@ -869,96 +955,65 @@ impl AppView {
         let preview = format_filename_preview(&config.excel.formato_nombre_archivo);
         let section = self.state.settings_section;
 
-        let nav = div()
-            .w_full()
-            .flex()
-            .flex_wrap()
-            .gap_2()
-            .child(
-                button("settings-general", "General").on_click(cx.listener(|this, _, _, cx| {
-                    this.state.settings_section = SettingsSection::General;
-                    cx.notify();
-                })),
+        let nav = v_stack()
+            .w(px(184.))
+            .flex_shrink_0()
+            .gap_1()
+            .child(text("SECCIONES").small().muted())
+            .children(
+                [
+                    ("settings-general", "General", SettingsSection::General),
+                    (
+                        "settings-extraccion",
+                        "Extracción",
+                        SettingsSection::Extraccion,
+                    ),
+                    (
+                        "settings-clasificacion",
+                        "Clasificación",
+                        SettingsSection::Clasificacion,
+                    ),
+                    ("settings-excel", "Excel", SettingsSection::Excel),
+                    ("settings-tabla", "Tabla", SettingsSection::Tabla),
+                    (
+                        "settings-apariencia",
+                        "Apariencia",
+                        SettingsSection::Apariencia,
+                    ),
+                    ("settings-atajos", "Atajos", SettingsSection::Atajos),
+                    ("settings-avanzado", "Avanzado", SettingsSection::Avanzado),
+                ]
+                .into_iter()
+                .map(|(id, label, target)| {
+                    let selected = section == target;
+                    div()
+                        .w_full()
+                        .when(selected, |row| {
+                            row.rounded_md().bg(cx.theme().surface_tertiary())
+                        })
+                        .child(
+                            button(
+                                id,
+                                if selected {
+                                    format!("›  {label}")
+                                } else {
+                                    format!("   {label}")
+                                },
+                            )
+                            .control_size(ControlSize::Small)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.select_settings_section(target, cx);
+                                },
+                            )),
+                        )
+                }),
             )
+            .child(div().h(px(1.)).my_2().bg(cx.theme().border()))
             .child(
-                button("settings-extraccion", "Extracción").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.state.settings_section = SettingsSection::Extraccion;
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                button("settings-clasificacion", "Clasificación").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.state.settings_section = SettingsSection::Clasificacion;
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                button("settings-excel", "Excel").on_click(cx.listener(|this, _, _, cx| {
-                    this.state.settings_section = SettingsSection::Excel;
-                    cx.notify();
-                })),
-            )
-            .child(
-                button("settings-tabla", "Tabla").on_click(cx.listener(|this, _, _, cx| {
-                    this.state.settings_section = SettingsSection::Tabla;
-                    cx.notify();
-                })),
-            )
-            .child(
-                button("settings-apariencia", "Apariencia").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.state.settings_section = SettingsSection::Apariencia;
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                button("settings-atajos", "Atajos").on_click(cx.listener(|this, _, _, cx| {
-                    this.state.settings_section = SettingsSection::Atajos;
-                    cx.notify();
-                })),
-            )
-            .child(
-                button("settings-avanzado", "Avanzado").on_click(cx.listener(|this, _, _, cx| {
-                    this.state.settings_section = SettingsSection::Avanzado;
-                    cx.notify();
-                })),
-            )
-            .child(
-                button("restore-section", "Restaurar sección").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.restore_section_defaults();
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                button("restore-all", "Restaurar todo").on_click(cx.listener(|this, _, _, cx| {
-                    this.restore_all_defaults();
-                    cx.notify();
-                })),
-            )
-            .child(
-                button("import-settings", "Importar").on_click(cx.listener(|this, _, _, cx| {
-                    this.pending_toast =
-                        Some(("Importar configuración (próximamente)".to_owned(), true));
-                    cx.notify();
-                })),
-            )
-            .child(
-                button("export-settings", "Exportar").on_click(cx.listener(|this, _, _, cx| {
-                    this.pending_toast =
-                        Some(("Exportar configuración (próximamente)".to_owned(), true));
-                    cx.notify();
-                })),
-            )
-            .child(
-                button("save-settings", "Guardar ahora")
-                    .on_click(cx.listener(|this, _, _, cx| this.save_config(cx))),
+                text("Los cambios se guardan automáticamente")
+                    .small()
+                    .muted(),
             );
 
         let section_content = match section {
@@ -1708,70 +1763,188 @@ impl AppView {
                 .into_any_element(),
         };
 
-        let form =
-            v_stack()
-                .w_full()
-                .gap_3()
-                .child(
-                    h_stack()
-                        .w_full()
-                        .justify_between()
-                        .items_center()
-                        .child(text("Configuración").small())
-                        .child(
-                            h_stack()
-                                .gap_3()
-                                .items_center()
-                                .child(
-                                    text(match self.config_save_status {
-                                        ConfigSaveStatus::Saved => "Guardado",
-                                        ConfigSaveStatus::Saving => "Guardando cambios…",
-                                        ConfigSaveStatus::Invalid => "Revisa los campos",
-                                        ConfigSaveStatus::Failed => "Error al guardar",
-                                    })
+        let section_title = match section {
+            SettingsSection::General => "General",
+            SettingsSection::Extraccion => "Extracción",
+            SettingsSection::Clasificacion => "Clasificación",
+            SettingsSection::Excel => "Excel",
+            SettingsSection::Tabla => "Tabla",
+            SettingsSection::Apariencia => "Apariencia",
+            SettingsSection::Atajos => "Atajos",
+            SettingsSection::Avanzado => "Avanzado",
+        };
+        let section_description = match section {
+            SettingsSection::General => "Preferencias de cuenta y carpetas",
+            SettingsSection::Extraccion => "Qué tipos de comprobante se muestran",
+            SettingsSection::Clasificacion => "Reglas de clasificación sugerida",
+            SettingsSection::Excel => "Formato y opciones del libro exportado",
+            SettingsSection::Tabla => "Comportamiento de las vistas previas",
+            SettingsSection::Apariencia => "Tema y densidad de la interfaz",
+            SettingsSection::Atajos => "Combinaciones de teclado",
+            SettingsSection::Avanzado => "Opciones de procesamiento y diagnóstico",
+        };
+
+        let content_panel = v_stack()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .gap_3()
+            .child(
+                h_stack()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        v_stack()
+                            .gap_1()
+                            .child(text(section_title).small())
+                            .child(text(section_description).small().muted()),
+                    )
+                    .child(
+                        button("restore-section", "Restaurar sección")
+                            .control_size(ControlSize::Small)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.restore_section_defaults(cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-section-content")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.settings_scroll)
+                    .pr_2()
+                    .child(section_content),
+            )
+            .when(!invalid.is_empty(), |panel| {
+                panel.child(div().child(text(invalid[0].mensaje.clone()).small().destructive()))
+            });
+
+        let form = v_stack()
+            .w_full()
+            .h_full()
+            .min_h_0()
+            .gap_3()
+            .child(
+                h_stack()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        v_stack()
+                            .gap_1()
+                            .child(text("Configuración").small())
+                            .child(
+                                text("Personaliza cómo se presenta y exporta la información")
                                     .small()
                                     .muted(),
-                                )
-                                .child(button("close-settings", "Cerrar").on_click(
-                                    cx.listener(|this, _, _, cx| this.close_settings(cx)),
-                                )),
-                        ),
-                )
-                .child(nav)
-                .child(
-                    div()
-                        .w_full()
-                        .max_h(px(420.))
-                        .overflow_hidden()
-                        .pr_1()
-                        .child(section_content),
-                );
-
-        let form = if invalid.is_empty() {
-            form
-        } else {
-            form.child(div().child(text(invalid[0].mensaje.clone()).small().destructive()))
-        };
+                            ),
+                    )
+                    .child(
+                        h_stack()
+                            .gap_3()
+                            .items_center()
+                            .child(
+                                text(match self.config_save_status {
+                                    ConfigSaveStatus::Saved => "Guardado",
+                                    ConfigSaveStatus::Saving => "Guardando cambios…",
+                                    ConfigSaveStatus::Invalid => "Revisa los campos",
+                                    ConfigSaveStatus::Failed => "Error al guardar",
+                                })
+                                .small()
+                                .muted(),
+                            )
+                            .child(button("close-settings", "Cerrar").on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.close_settings(cx);
+                                    window.focus(&this.root_focus, cx);
+                                },
+                            ))),
+                    ),
+            )
+            .child(
+                h_stack()
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .items_stretch()
+                    .gap_3()
+                    .child(
+                        nav.h_full()
+                            .p_2()
+                            .rounded_md()
+                            .bg(cx.theme().surface_secondary()),
+                    )
+                    .child(content_panel),
+            )
+            .child(
+                h_stack()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border())
+                    .child(
+                        h_stack()
+                            .gap_2()
+                            .when(self.confirm_restore_all, |actions| {
+                                actions
+                                    .child(
+                                        text("¿Restaurar todos los valores predeterminados?")
+                                            .small(),
+                                    )
+                                    .child(button("cancel-restore-all", "Cancelar").on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.confirm_restore_all = false;
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(button("confirm-restore-all", "Restaurar").on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.restore_all_defaults(cx);
+                                        }),
+                                    ))
+                            })
+                            .when(!self.confirm_restore_all, |actions| {
+                                actions.child(button("restore-all", "Restaurar todo").on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.confirm_restore_all = true;
+                                        cx.notify();
+                                    }),
+                                ))
+                            }),
+                    )
+                    .child(
+                        button("save-settings", "Guardar ahora")
+                            .on_click(cx.listener(|this, _, _, cx| this.save_config(cx))),
+                    ),
+            );
 
         div()
             .id("settings-overlay")
             .absolute()
             .inset_0()
-            .bg(cx.theme().bg())
+            .p_4()
+            .bg(cx.theme().bg().opacity(0.82))
             .flex()
             .items_center()
             .justify_center()
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
-                    .w(px(900.))
-                    .max_w(px(900.))
-                    .max_h(px(620.))
+                    .w_full()
+                    .max_w(px(920.))
+                    .h_full()
+                    .max_h(px(680.))
+                    .min_h_0()
                     .overflow_hidden()
                     .bg(cx.theme().surface())
                     .border_1()
                     .border_color(cx.theme().border())
-                    .rounded(px(12.))
+                    .rounded_lg()
                     .p_4()
                     .child(form),
             )
@@ -1788,6 +1961,8 @@ impl AppView {
                 self.table_scroll_handles[0].clone(),
                 self.table_h_scroll_handles[0].clone(),
                 "cfdi-rows",
+                self.state.config.tabla.altura_fila.clamp(28, 44),
+                self.state.config.tabla.mostrar_hover,
             ),
             Vista::Resumen => DataTable::new(
                 &RESUMEN_COLUMNS,
@@ -1795,6 +1970,8 @@ impl AppView {
                 self.table_scroll_handles[1].clone(),
                 self.table_h_scroll_handles[1].clone(),
                 "summary-rows",
+                self.state.config.tabla.altura_fila.clamp(28, 44),
+                self.state.config.tabla.mostrar_hover,
             ),
             Vista::Clasificacion => DataTable::new(
                 &CLASIFICACION_COLUMNS,
@@ -1802,6 +1979,8 @@ impl AppView {
                 self.table_scroll_handles[2].clone(),
                 self.table_h_scroll_handles[2].clone(),
                 "classification-rows",
+                self.state.config.tabla.altura_fila.clamp(28, 44),
+                self.state.config.tabla.mostrar_hover,
             ),
             Vista::Errores => DataTable::new(
                 &ERROR_COLUMNS,
@@ -1809,6 +1988,8 @@ impl AppView {
                 self.table_scroll_handles[3].clone(),
                 self.table_h_scroll_handles[3].clone(),
                 "error-rows",
+                self.state.config.tabla.altura_fila.clamp(28, 44),
+                self.state.config.tabla.mostrar_hover,
             ),
         }
         .into_any_element()
@@ -1822,7 +2003,6 @@ enum WorkerMessage {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.schedule_config_save(cx);
         theme::apply_configured_appearance(
             &self.state.config.apariencia.tema,
             window.appearance(),
@@ -1894,6 +2074,14 @@ impl Render for AppView {
             .id("app-root")
             .track_focus(&root_focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.state.settings_open && event.keystroke.key.eq_ignore_ascii_case("escape") {
+                    this.close_settings(cx);
+                    window.focus(&this.root_focus, cx);
+                    return;
+                }
+                if this.state.settings_open {
+                    return;
+                }
                 let command =
                     event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
                 if command {
@@ -1978,57 +2166,58 @@ impl AppView {
         let validation = validar_rfc(&self.state.rfc_propio);
         let has_rfc = !self.state.rfc_propio.trim().is_empty();
 
-        let zip_label = self
-            .state
-            .ruta_zip
-            .as_deref()
-            .and_then(Path::file_name)
-            .map(|name| name.to_string_lossy().to_string());
-
         h_stack()
             .w_full()
             .items_center()
             .justify_between()
             .gap_4()
             .px_6()
-            .py_2()
+            .py_3()
             .border_b_1()
             .border_color(cx.theme().border())
             .bg(cx.theme().surface())
             .child(
                 h_stack()
-                    .gap_3()
-                    .items_center()
-                    .child(text("RFC propio (opcional):").small().muted())
+                    .gap_2()
+                    .items_start()
+                    .child(
+                        v_stack().gap_1().child(text("RFC propio").small()).child(
+                            text("Opcional · Para sugerir Ingreso/Gasto")
+                                .small()
+                                .muted(),
+                        ),
+                    )
                     .child(
                         div()
                             .w(px(200.))
-                            .child(text_field(&self.rfc_input, cx).placeholder("Ej. AAA010101AAA")),
+                            .child(text_field(&self.rfc_input, cx).placeholder("AAA010101AAA")),
                     )
-                    .child(if let Some(err) = validation {
-                        badge(err).destructive().control_size(ControlSize::Small)
-                    } else if has_rfc {
-                        badge("RFC válido")
-                            .secondary()
-                            .control_size(ControlSize::Small)
-                    } else {
-                        badge("Opcional: guía Ingreso/Gasto")
-                            .outline()
-                            .control_size(ControlSize::Small)
+                    .when_some(validation, |stack, err| {
+                        stack.child(
+                            div()
+                                .pt_1()
+                                .child(badge(err).destructive().control_size(ControlSize::Small)),
+                        )
+                    })
+                    .when(validation.is_none() && has_rfc, |stack| {
+                        stack.child(
+                            div().pt_1().child(
+                                badge("RFC válido")
+                                    .secondary()
+                                    .control_size(ControlSize::Small),
+                            ),
+                        )
                     }),
             )
             .child(
                 h_stack()
                     .gap_3()
                     .items_center()
-                    .when_some(zip_label, |stack, name| {
-                        stack.child(small(format!("Listo: {}", name)).muted())
-                    })
                     .child(
                         button(
                             "process-button",
                             if is_processing {
-                                "Procesando…"
+                                "Procesando ZIP"
                             } else {
                                 "Procesar ZIP"
                             },
@@ -2037,7 +2226,7 @@ impl AppView {
                         .on_click(cx.listener(|this, _, _, cx| this.process_zip(cx))),
                     )
                     .child(
-                        button("settings-button", "⚙")
+                        button("settings-button", "Configuración…")
                             .control_size(ControlSize::Small)
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),

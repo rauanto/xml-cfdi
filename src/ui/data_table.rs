@@ -17,7 +17,7 @@ use gpui::{
     Window, div, point, prelude::*, px, uniform_list,
 };
 use gpuikit::{
-    elements::{badge::badge, button::button, typography::small},
+    elements::{button::button, typography::small},
     layout::h_stack,
     theme::{ActiveTheme, ControlSize, Themeable},
     traits::control_sized::ControlSized,
@@ -157,6 +157,8 @@ pub struct DataTable {
     scroll_handle: UniformListScrollHandle,
     horizontal_scroll: ScrollHandle,
     list_id: &'static str,
+    row_height: i32,
+    show_hover: bool,
 }
 
 impl DataTable {
@@ -166,6 +168,8 @@ impl DataTable {
         scroll_handle: UniformListScrollHandle,
         horizontal_scroll: ScrollHandle,
         list_id: &'static str,
+        row_height: i32,
+        show_hover: bool,
     ) -> Self {
         Self {
             columns,
@@ -173,6 +177,8 @@ impl DataTable {
             scroll_handle,
             horizontal_scroll,
             list_id,
+            row_height,
+            show_hover,
         }
     }
 }
@@ -185,6 +191,8 @@ impl RenderOnce for DataTable {
             scroll_handle,
             horizontal_scroll,
             list_id,
+            row_height,
+            show_hover,
         } = self;
 
         let t = cx.theme();
@@ -231,12 +239,15 @@ impl RenderOnce for DataTable {
                 .justify_center()
                 .gap_2()
                 .text_color(muted_foreground)
+                .child(small("Sin filas para mostrar"))
                 .child(
-                    badge("Sin registros")
-                        .secondary()
-                        .control_size(ControlSize::Small),
+                    small(if list_id == "error-rows" {
+                        "No se registraron errores en este ZIP."
+                    } else {
+                        "El procesamiento no generó filas para esta vista."
+                    })
+                    .muted(),
                 )
-                .child(small("No hay filas para mostrar en esta vista").muted())
                 .into_any_element()
         } else {
             let cols = columns;
@@ -250,14 +261,14 @@ impl RenderOnce for DataTable {
                             .id(("data-row", index))
                             .flex()
                             .items_center()
-                            .h(px(theme::ROW_HEIGHT))
+                            .h(px(row_height as f32))
                             .w(px(total_width))
                             .border_b_1()
                             .border_color(border)
                             .text_size(px(13.))
                             .text_color(foreground)
                             .when(index % 2 == 1, |s| s.bg(surface_secondary))
-                            .hover(|style| style.bg(row_hover))
+                            .when(show_hover, |row| row.hover(|style| style.bg(row_hover)))
                             .children(cols.iter().zip(widths.iter()).enumerate().map(
                                 |(i, (col, &ancho))| celda(ancho, col.alineacion, fila[i].clone()),
                             ))
@@ -305,18 +316,18 @@ impl RenderOnce for DataTable {
                     .gap_2()
                     .items_center()
                     .child(
-                        badge(format!("{} columnas", columns.len()))
-                            .secondary()
-                            .control_size(ControlSize::Small),
+                        small(format!(
+                            "{} filas · {} columnas",
+                            format_integer(row_count),
+                            columns.len()
+                        ))
+                        .muted(),
                     )
-                    .child(small(format!("{} filas", format_integer(row_count))).muted())
                     .when(is_scrollable, |stack| {
-                        stack.child(
-                            small("· Rueda: vertical | Mayús + rueda o botones: deslizar").muted(),
-                        )
+                        stack.child(small("Rueda vertical · Mayús + rueda horizontal").muted())
                     })
                     .when(!is_scrollable, |stack| {
-                        stack.child(small("· Ajustado al ancho completo").muted())
+                        stack.child(small("Ajustada al ancho disponible").muted())
                     }),
             )
             .child(
@@ -325,14 +336,17 @@ impl RenderOnce for DataTable {
                     .items_center()
                     .when(is_scrollable, |stack| {
                         let max_scroll = (total_width - available_width).max(0.0);
+                        let at_start = horizontal_scroll.offset().x >= px(0.);
+                        let at_end = horizontal_scroll.offset().x <= px(-max_scroll);
                         let h1 = horizontal_scroll.clone();
                         let h2 = horizontal_scroll.clone();
                         let h3 = horizontal_scroll.clone();
                         let h4 = horizontal_scroll.clone();
                         stack
                             .child(
-                                button("scroll-to-start", "⇤ Inicio")
+                                button("scroll-to-start", "Inicio")
                                     .control_size(ControlSize::Small)
+                                    .disabled(at_start)
                                     .on_click(move |_, window, _| {
                                         let y = h1.offset().y;
                                         h1.set_offset(point(px(0.), y));
@@ -340,8 +354,9 @@ impl RenderOnce for DataTable {
                                     }),
                             )
                             .child(
-                                button("scroll-step-left", "◀ Deslizar")
+                                button("scroll-step-left", "Anterior")
                                     .control_size(ControlSize::Small)
+                                    .disabled(at_start)
                                     .on_click(move |_, window, _| {
                                         let y = h2.offset().y;
                                         let cur_x = h2.offset().x;
@@ -351,8 +366,9 @@ impl RenderOnce for DataTable {
                                     }),
                             )
                             .child(
-                                button("scroll-step-right", "Deslizar ▶")
+                                button("scroll-step-right", "Siguiente")
                                     .control_size(ControlSize::Small)
+                                    .disabled(at_end)
                                     .on_click(move |_, window, _| {
                                         let y = h3.offset().y;
                                         let cur_x = h3.offset().x;
@@ -367,8 +383,9 @@ impl RenderOnce for DataTable {
                                     }),
                             )
                             .child(
-                                button("scroll-to-end", "Final ⇥")
+                                button("scroll-to-end", "Final")
                                     .control_size(ControlSize::Small)
+                                    .disabled(at_end)
                                     .on_click(move |_, window, _| {
                                         let y = h4.offset().y;
                                         let limit = if h4.max_offset().x > px(0.) {

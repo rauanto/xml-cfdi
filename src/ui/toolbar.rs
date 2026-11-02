@@ -1,8 +1,11 @@
 //! Barra superior compuesta con controles y tipografía de gpuikit.
 
-use gpui::{App, ClickEvent, IntoElement, RenderOnce, Window, prelude::*};
+use gpui::{App, ClickEvent, IntoElement, RenderOnce, Window, div, prelude::*, rems};
 use gpuikit::{
-    elements::{badge::badge, button::button, typography::h4},
+    elements::{
+        button::button,
+        typography::{h4, small, text},
+    },
     layout::h_stack,
     theme::{ActiveTheme, ControlSize, Themeable},
     traits::control_sized::ControlSized,
@@ -43,24 +46,26 @@ impl RenderOnce for Toolbar {
             .items_center()
             .justify_between()
             .px_6()
+            .gap_4()
             .border_b_1()
             .border_color(theme.border())
-            .bg(theme.surface())
+            .bg(theme.bg())
             .child(
                 h_stack()
-                    .gap_3()
+                    .gap_4()
+                    .min_w_0()
                     .items_center()
-                    .child(h4("CFDI ZIP Processor"))
                     .child(
-                        badge("CFDI 3.3 / 4.0")
-                            .secondary()
-                            .control_size(ControlSize::Small),
+                        gpuikit::layout::v_stack()
+                            .gap_1()
+                            .child(h4("Procesamiento de CFDI"))
+                            .child(small("Extrae datos XML y exporta a Excel").muted()),
                     )
                     .when_some(self.zip_name, |stack, name| {
                         stack.child(
-                            badge(format!("📦 {}", name))
-                                .outline()
-                                .control_size(ControlSize::Small),
+                            div().max_w(rems(18.)).min_w_0().child(
+                                text(format!("ZIP · {name}")).small().muted().truncate(true),
+                            ),
                         )
                     }),
             )
@@ -69,12 +74,12 @@ impl RenderOnce for Toolbar {
                     .gap_2()
                     .items_center()
                     .child(
-                        button("open-zip-toolbar", "Seleccionar ZIP")
+                        button("open-zip-toolbar", "Abrir ZIP…")
                             .control_size(ControlSize::Small)
                             .on_click(self.on_open_zip),
                     )
                     .child(
-                        button("export-button", "Exportar Excel")
+                        button("export-button", "Exportar Excel…")
                             .control_size(ControlSize::Small)
                             .disabled(!self.export_enabled)
                             .on_click(self.on_export),

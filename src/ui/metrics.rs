@@ -2,13 +2,9 @@
 
 use gpui::{IntoElement, ParentElement, RenderOnce, Window, div, prelude::*};
 use gpuikit::{
-    elements::{
-        badge::badge,
-        typography::{h4, small},
-    },
-    layout::h_stack,
-    theme::{ActiveTheme, ControlSize, Themeable},
-    traits::control_sized::ControlSized,
+    elements::typography::{h4, small, text},
+    layout::{h_stack, v_stack},
+    theme::{ActiveTheme, Themeable},
 };
 
 use super::app_view::{AppState, format_integer};
@@ -41,65 +37,48 @@ impl RenderOnce for Metrics {
             div()
                 .flex_1()
                 .min_w_0()
-                .px_4()
-                .py_2()
-                .rounded_lg()
-                .border_1()
-                .border_color(theme.border())
-                .bg(theme.surface())
                 .flex()
                 .flex_col()
                 .gap_1()
                 .child(small(label).muted())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(h4(value).map(|this| {
-                            if is_error && error_count > 0 {
-                                this.destructive()
-                            } else {
-                                this
-                            }
-                        }))
-                        .child(if is_error {
-                            if error_count > 0 {
-                                badge("Requiere revisión")
-                                    .destructive()
-                                    .control_size(ControlSize::Small)
-                            } else {
-                                badge("Sin errores")
-                                    .secondary()
-                                    .control_size(ControlSize::Small)
-                            }
-                        } else {
-                            badge("OK").secondary().control_size(ControlSize::Small)
-                        }),
-                )
+                .child(h4(value).map(|this| {
+                    if is_error && error_count > 0 {
+                        this.destructive()
+                    } else {
+                        this
+                    }
+                }))
         };
 
-        h_stack()
+        v_stack()
             .w_full()
-            .items_center()
-            .gap_3()
+            .gap_2()
             .px_6()
             .py_2()
-            .child(card_metric("XMLs Leídos", format_integer(xml_count), false))
-            .child(card_metric(
-                "CFDIs Válidos",
-                format_integer(cfdi_count),
-                false,
-            ))
-            .child(card_metric(
-                "Conceptos Extraídos",
-                format_integer(conceptos_count),
-                false,
-            ))
-            .child(card_metric(
-                "Errores Detectados",
-                format_integer(error_count),
-                true,
-            ))
+            .child(text("Resultados del ZIP").small().muted())
+            .child(
+                h_stack()
+                    .w_full()
+                    .items_center()
+                    .gap_4()
+                    .px_4()
+                    .py_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border())
+                    .bg(theme.surface_secondary())
+                    .child(card_metric("XML leídos", format_integer(xml_count), false))
+                    .child(card_metric(
+                        "CFDI válidos",
+                        format_integer(cfdi_count),
+                        false,
+                    ))
+                    .child(card_metric(
+                        "Conceptos",
+                        format_integer(conceptos_count),
+                        false,
+                    ))
+                    .child(card_metric("Errores", format_integer(error_count), true)),
+            )
     }
 }

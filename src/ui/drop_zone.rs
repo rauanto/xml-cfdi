@@ -42,29 +42,22 @@ impl RenderOnce for DropZone {
             .max_w(px(theme::DROP_ZONE_WIDTH + 80.0))
             .items_center()
             .justify_center()
-            .p_8()
-            .gap_4()
+            .p_6()
+            .gap_3()
             .rounded_xl()
             .border_dashed()
             .border_2()
             .border_color(theme.border())
-            .bg(theme.surface())
+            .bg(theme.surface_secondary())
             .cursor_pointer()
-            .hover(|s| s.bg(theme.surface_secondary()).border_color(theme.accent()))
+            .hover(|s| s.bg(theme.surface_tertiary()).border_color(theme.accent()))
             .on_click(self.on_click)
-            .child(h3("Cargar comprobantes CFDI en ZIP"))
-            .child(
-                p("Arrastra y suelta tu archivo .zip aquí o pulsa para seleccionarlo en tu equipo.")
-                    .muted(),
-            )
-            .child(
-                button("browse-button", self.button_label)
-                    .control_size(ControlSize::Large),
-            )
+            .child(h3("Carga un archivo ZIP"))
+            .child(p("Suelta aquí el ZIP con tus CFDI o selecciónalo desde el equipo.").muted())
+            .child(button("browse-button", self.button_label).control_size(ControlSize::Large))
             .child(
                 h_stack()
                     .gap_2()
-                    .mt_2()
                     .child(
                         badge("CFDI 3.3 / 4.0")
                             .secondary()
@@ -76,7 +69,7 @@ impl RenderOnce for DropZone {
                             .control_size(ControlSize::Small),
                     )
                     .child(
-                        badge("Tolerante a XMLs dañados")
+                        badge("Continúa ante XML dañados")
                             .secondary()
                             .control_size(ControlSize::Small),
                     ),
