@@ -1,11 +1,17 @@
-//! Ventanas y presentación GPUI; sin parseo ni escritura directa de archivos.
+//! Interfaz GPUI; delega el procesamiento y la exportación a sus casos de uso y ports.
 
-use gpui::{Context, IntoElement, Render, Window, div};
+use gpui::{App, ClickEvent, Window};
 
-pub struct AppView;
+pub mod app_view;
+pub mod data_table;
+pub mod drop_zone;
+pub mod metrics;
+pub mod status_bar;
+pub mod tabs;
+pub mod theme;
+pub mod toolbar;
 
-impl Render for AppView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
-}
+pub(crate) type UiClickHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static;
+pub(crate) type TabSelectHandler = dyn Fn(&usize, &mut Window, &mut App) + 'static;
+
+pub use app_view::AppView;

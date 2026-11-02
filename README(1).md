@@ -93,6 +93,31 @@ tests/
 
 La UI nunca parsea ni escribe archivos directamente: llama a los casos de uso. El procesamiento corre fuera del hilo de UI y reporta progreso.
 
+## Interfaz de escritorio
+
+La ventana abre a 1200 × 760 px y admite un mínimo de 900 × 560 px. El tema claro es predeterminado; GPUI sigue la apariencia clara u oscura del sistema. Inter permite cifras tabulares cuando está instalado; GPUI usa sus fuentes de respaldo si no está disponible.
+
+Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana. La vista previa muestra solo las filas visibles mediante una lista virtualizada; las columnas mantienen su encabezado al desplazarse horizontalmente. Para recorrer columnas usa `Mayús + rueda` o los controles **Anterior/Siguiente** bajo la tabla.
+
+Atajos:
+
+- `Ctrl/Cmd+O`: seleccionar un ZIP.
+- `Ctrl/Cmd+E`: exportar el Excel.
+- `Ctrl/Cmd+1` a `Ctrl/Cmd+4`: cambiar de pestaña.
+
+GPUI 0.2.2 no expone filtros de extensión en `PathPromptOptions`. El selector nativo permite elegir archivos y la aplicación valida `.zip` después de la selección. Al guardar, la aplicación añade `.xlsx` si falta. Tras exportar, **Abrir carpeta** revela el archivo en el explorador del sistema.
+
+Para generar un ZIP de carga con 5,000 CFDI sintéticos basados en el fixture:
+
+```bash
+python3 tools/generate_load_test_zip.py /tmp/cfdi_5000.zip --count 5000
+cargo run
+```
+
+Abre `/tmp/cfdi_5000.zip`, pulsa **Procesar** y verifica que la ventana siga respondiendo mientras avanza la barra de progreso. La tabla virtualiza las filas del resultado.
+
+La prueba automatizada `cargo test procesar_zip_procesa_5000_xml_sin_perder_filas` verifica que el caso de uso procese 5,000 XML y conserve todas sus filas.
+
 ## Preguntas abiertas
 
 1. **Emitidas vs. Recibidas:** no hay columna por ahora. RFC propio opcional solo guía sugerencias de Ingreso/Gasto.

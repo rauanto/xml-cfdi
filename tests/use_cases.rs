@@ -301,6 +301,29 @@ fn procesar_zip_cuenta_xml_validos_y_continua_tras_error() {
 }
 
 #[test]
+fn procesar_zip_procesa_5000_xml_sin_perder_filas() {
+    let fixture = include_bytes!("fixtures/cfdi40_ganado_iva_tasa0.xml");
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+
+    for index in 0..5_000 {
+        writer
+            .start_file(format!("lote/{index}.xml"), options)
+            .expect("ZIP entry starts");
+        writer.write_all(fixture).expect("fixture writes to ZIP");
+    }
+
+    let archive = writer.finish().expect("ZIP finishes").into_inner();
+    let zip_file = escribir_temporal(&archive);
+    let result = ProcesarZip::new(ZipXmlReader, XmlCfdiParser).ejecutar(zip_file.path(), None);
+
+    assert_eq!(result.total_xml_leidos, 5_000);
+    assert_eq!(result.total_cfdi_ok, 5_000);
+    assert_eq!(result.filas.len(), 5_000);
+    assert!(result.errores.is_empty());
+}
+
+#[test]
 fn procesar_zip_reporta_zip_corrupto_sin_detener_el_caso_de_uso() {
     let zip_file = escribir_temporal(b"not a zip");
     let result = ProcesarZip::new(ZipXmlReader, XmlCfdiParser).ejecutar(zip_file.path(), None);
