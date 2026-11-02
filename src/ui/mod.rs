@@ -12,6 +12,5 @@ pub mod theme;
 pub mod toolbar;
 
 pub(crate) type UiClickHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static;
-pub(crate) type TabSelectHandler = dyn Fn(&usize, &mut Window, &mut App) + 'static;
 
 pub use app_view::AppView;

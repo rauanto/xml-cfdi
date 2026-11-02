@@ -1,13 +1,14 @@
-//! Tabla genérica con virtualización de filas y columnas tipadas por ancho/alineación.
+//! Adaptador de las cuatro vistas al componente Table de gpuikit.
 
 use std::sync::Arc;
 
 use gpui::{
-    IntoElement, ParentElement, RenderOnce, ScrollHandle, UniformListScrollHandle, Window, div,
-    point, prelude::*, px, uniform_list,
+    IntoElement, ParentElement, RenderOnce, ScrollHandle, StatefulInteractiveElement,
+    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
+use gpuikit::theme::{ActiveTheme, Themeable};
 
-use super::{theme, theme::Palette};
+use super::theme;
 
 #[derive(Clone, Copy)]
 pub enum Alineacion {
@@ -86,7 +87,6 @@ const fn col_r(titulo: &'static str, ancho: f32) -> Columna {
 
 #[derive(IntoElement)]
 pub struct DataTable<T: 'static> {
-    palette: Palette,
     columns: &'static [Columna],
     rows: Arc<Vec<T>>,
     cell: fn(&T, usize) -> String,
@@ -97,7 +97,6 @@ pub struct DataTable<T: 'static> {
 
 impl<T: 'static> DataTable<T> {
     pub fn new(
-        palette: Palette,
         columns: &'static [Columna],
         rows: Arc<Vec<T>>,
         cell: fn(&T, usize) -> String,
@@ -106,7 +105,6 @@ impl<T: 'static> DataTable<T> {
         list_id: &'static str,
     ) -> Self {
         Self {
-            palette,
             columns,
             rows,
             cell,
@@ -118,50 +116,71 @@ impl<T: 'static> DataTable<T> {
 }
 
 impl<T: 'static> RenderOnce for DataTable<T> {
-    fn render(self, _: &mut Window, _: &mut gpui::App) -> impl IntoElement {
-        let palette = self.palette;
+    fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         let columns = self.columns;
         let rows = self.rows;
         let cell = self.cell;
-        let total_width = columns.iter().map(|column| column.ancho).sum::<f32>();
+        let scroll_handle = self.scroll_handle;
         let horizontal_scroll = self.horizontal_scroll;
-        let row_palette = palette;
-        let list = uniform_list(self.list_id, rows.len(), move |range, _, _| {
-            range
-                .map(|index| {
-                    let row = &rows[index];
-                    div()
-                        .id(("data-row", index))
-                        .flex()
-                        .items_center()
-                        .h(px(theme::ROW_HEIGHT))
-                        .w(px(total_width))
-                        .border_b_1()
-                        .border_color(row_palette.border)
-                        .text_size(px(theme::FONT_BODY))
-                        .text_color(row_palette.text)
-                        .hover(|style| style.bg(row_palette.hover))
-                        .children(columns.iter().enumerate().map(|(column_index, column)| {
-                            let value = cell(row, column_index);
-                            let mut cell = div()
-                                .flex_shrink_0()
-                                .w(px(column.ancho))
-                                .h_full()
-                                .flex()
-                                .items_center()
-                                .px(px(theme::SPACING))
-                                .whitespace_nowrap()
-                                .truncate();
-                            if matches!(column.alineacion, Alineacion::Derecha) {
-                                cell = cell.justify_end().text_right();
-                            }
-                            cell.child(value)
-                        }))
-                })
-                .collect::<Vec<_>>()
-        })
-        .size_full()
-        .track_scroll(self.scroll_handle);
+        let list_id = self.list_id;
+        let max_height = (window.bounds().size.height - px(280.)).max(px(160.));
+        let total_width = columns.iter().map(|column| column.ancho).sum::<f32>();
+        let theme = cx.theme();
+        let border = theme.border();
+        let surface = theme.surface();
+        let foreground = theme.fg();
+        let muted_foreground = theme.fg_muted();
+        let row_hover = theme.surface_tertiary();
+
+        let body = if rows.is_empty() {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(muted_foreground)
+                .child("Sin filas para mostrar")
+                .into_any_element()
+        } else {
+            uniform_list(list_id, rows.len(), move |range, _, _| {
+                range
+                    .map(|index| {
+                        let item = &rows[index];
+                        div()
+                            .id(("data-row", index))
+                            .flex()
+                            .items_center()
+                            .h(px(theme::ROW_HEIGHT))
+                            .w(px(total_width))
+                            .border_b_1()
+                            .border_color(border)
+                            .text_size(px(13.))
+                            .text_color(foreground)
+                            .hover(|style| style.bg(row_hover))
+                            .children(columns.iter().enumerate().map(|(column_index, column)| {
+                                let mut cell_element = div()
+                                    .flex_shrink_0()
+                                    .w(px(column.ancho))
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .px(px(8.))
+                                    .whitespace_nowrap()
+                                    .truncate();
+                                if matches!(column.alineacion, Alineacion::Derecha) {
+                                    cell_element = cell_element.justify_end().text_right();
+                                }
+                                cell_element.child(cell(item, column_index))
+                            }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .size_full()
+            .track_scroll(&scroll_handle)
+            .scrollbar_width(px(8.))
+            .into_any_element()
+        };
 
         let header = div()
             .w(px(total_width))
@@ -169,131 +188,45 @@ impl<T: 'static> RenderOnce for DataTable<T> {
             .flex()
             .items_center()
             .border_b_1()
-            .border_color(palette.border)
-            .bg(palette.surface)
-            .text_size(px(theme::FONT_SMALL))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(palette.secondary)
+            .border_color(border)
+            .bg(surface)
+            .text_size(px(12.))
+            .text_color(muted_foreground)
             .children(columns.iter().map(|column| {
-                let mut header = div()
+                let mut header_cell = div()
                     .flex_shrink_0()
                     .w(px(column.ancho))
                     .h_full()
                     .flex()
                     .items_center()
-                    .px(px(theme::SPACING))
+                    .px(px(8.))
                     .whitespace_nowrap()
                     .truncate();
                 if matches!(column.alineacion, Alineacion::Derecha) {
-                    header = header.justify_end().text_right();
+                    header_cell = header_cell.justify_end().text_right();
                 }
-                header.child(column.titulo)
+                header_cell.child(column.titulo)
             }));
 
         div()
-            .flex()
-            .flex_col()
+            .id("data-table-horizontal-scroll")
             .w_full()
-            .flex_1()
+            .h_full()
             .min_w_0()
             .min_h_0()
-            .overflow_hidden()
-            .bg(palette.surface)
+            .max_h(max_height)
+            .overflow_x_scroll()
+            .scrollbar_width(px(8.))
+            .track_scroll(&horizontal_scroll)
+            .bg(surface)
             .child(
                 div()
-                    .id("data-table-horizontal-scroll")
-                    .w_full()
-                    .min_w_0()
+                    .w(px(total_width))
                     .h_full()
-                    .overflow_x_scroll()
-                    .track_scroll(&horizontal_scroll)
-                    .child(
-                        div()
-                            .w(px(total_width))
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .child(header)
-                            .child(div().flex_1().min_h_0().overflow_hidden().child(list)),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(theme::TABLE_NAV_HEIGHT))
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(theme::SPACING))
-                    .border_t_1()
-                    .border_color(palette.border)
-                    .text_size(px(theme::FONT_SMALL))
-                    .text_color(palette.secondary)
-                    .child("Usa Mayús + rueda o las flechas para ver más columnas")
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(theme::SMALL_SPACING))
-                            .child(scroll_button(
-                                palette,
-                                "table-scroll-left",
-                                "← Anterior",
-                                horizontal_scroll.offset().x < px(0.),
-                                horizontal_scroll.clone(),
-                                true,
-                            ))
-                            .child(scroll_button(
-                                palette,
-                                "table-scroll-right",
-                                "Siguiente →",
-                                -horizontal_scroll.max_offset().width
-                                    < horizontal_scroll.offset().x,
-                                horizontal_scroll,
-                                false,
-                            )),
-                    ),
+                    .flex_col()
+                    .child(header)
+                    .child(div().flex_1().min_h_0().overflow_hidden().child(body)),
             )
     }
-}
-
-fn scroll_button(
-    palette: Palette,
-    id: &'static str,
-    label: &'static str,
-    enabled: bool,
-    scroll_handle: ScrollHandle,
-    left: bool,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .h(px(theme::CONTROL_HEIGHT - theme::SMALL_SPACING))
-        .px(px(theme::SPACING))
-        .flex()
-        .items_center()
-        .rounded(px(theme::CORNER_RADIUS))
-        .border_1()
-        .border_color(palette.border)
-        .text_size(px(theme::FONT_SMALL))
-        .text_color(if enabled {
-            palette.text
-        } else {
-            palette.secondary
-        })
-        .when(enabled, |button| {
-            button
-                .cursor_pointer()
-                .hover(|style| style.bg(palette.hover))
-                .on_click(move |_, window, _| {
-                    let mut offset = scroll_handle.offset();
-                    offset.x = if left {
-                        (offset.x + px(320.)).min(px(0.))
-                    } else {
-                        (offset.x - px(320.)).max(-scroll_handle.max_offset().width)
-                    };
-                    scroll_handle.set_offset(point(offset.x, offset.y));
-                    window.refresh();
-                })
-        })
-        .child(label)
 }

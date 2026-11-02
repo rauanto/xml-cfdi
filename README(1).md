@@ -8,7 +8,7 @@ Aplicación de escritorio (Rust + GPUI) que procesa un archivo ZIP con CFDI en X
 
 | Capa | Tecnología |
 |------|-----------|
-| UI | GPUI |
+| UI | `gpuikit` 0.9.0 sobre `gpui-unofficial` 1.14.2 |
 | ZIP | `zip` |
 | XML con namespaces | `quick-xml` (`NsReader`) |
 | Excel | `rust_xlsxwriter` |
@@ -95,9 +95,11 @@ La UI nunca parsea ni escribe archivos directamente: llama a los casos de uso. E
 
 ## Interfaz de escritorio
 
-La ventana abre a 1200 × 760 px y admite un mínimo de 900 × 560 px. El tema claro es predeterminado; GPUI sigue la apariencia clara u oscura del sistema. Inter permite cifras tabulares cuando está instalado; GPUI usa sus fuentes de respaldo si no está disponible.
+La ventana abre a 1200 × 760 px y admite un mínimo de 900 × 560 px. La interfaz usa componentes de GPUKit para botones, campo de texto, pestañas, progreso, notificaciones, tipografía y layout. La apariencia del sistema selecciona entre los temas claro y oscuro Gruvbox incluidos en GPUKit.
 
-Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana. La vista previa muestra solo las filas visibles mediante una lista virtualizada; las columnas mantienen su encabezado al desplazarse horizontalmente. Para recorrer columnas usa `Mayús + rueda` o los controles **Anterior/Siguiente** bajo la tabla.
+Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana. Las vistas previas usan el componente `Table` de GPUKit, con encabezado fijo, cuerpo desplazable y columnas con alineación por tipo de dato. Se quitó el desplazamiento horizontal personalizado y sus controles.
+
+GPUKit 0.9.0 no virtualiza sus tablas: el componente renderiza todas las filas recibidas. Con conjuntos muy grandes (por ejemplo, 10,000+ filas), la vista previa puede ralentizarse; el procesamiento en segundo plano continúa separado del hilo de UI, pero la tabla no mantiene el rendimiento de una lista virtualizada.
 
 Atajos:
 
@@ -105,7 +107,7 @@ Atajos:
 - `Ctrl/Cmd+E`: exportar el Excel.
 - `Ctrl/Cmd+1` a `Ctrl/Cmd+4`: cambiar de pestaña.
 
-GPUI 0.2.2 no expone filtros de extensión en `PathPromptOptions`. El selector nativo permite elegir archivos y la aplicación valida `.zip` después de la selección. Al guardar, la aplicación añade `.xlsx` si falta. Tras exportar, **Abrir carpeta** revela el archivo en el explorador del sistema.
+El selector nativo de GPUI no expone filtros de extensión en `PathPromptOptions`. Permite elegir archivos y la aplicación valida `.zip` después de la selección. Al guardar, la aplicación añade `.xlsx` si falta. Tras exportar, **Abrir carpeta** revela el archivo en el explorador del sistema.
 
 Para generar un ZIP de carga con 5,000 CFDI sintéticos basados en el fixture:
 
@@ -114,7 +116,7 @@ python3 tools/generate_load_test_zip.py /tmp/cfdi_5000.zip --count 5000
 cargo run
 ```
 
-Abre `/tmp/cfdi_5000.zip`, pulsa **Procesar** y verifica que la ventana siga respondiendo mientras avanza la barra de progreso. La tabla virtualiza las filas del resultado.
+Abre `/tmp/cfdi_5000.zip`, pulsa **Procesar** y verifica que la ventana siga respondiendo mientras avanza la barra de progreso. La tabla de GPUKit dibuja las filas completas, así que observa también el rendimiento al mostrar resultados grandes.
 
 La prueba automatizada `cargo test procesar_zip_procesa_5000_xml_sin_perder_filas` verifica que el caso de uso procese 5,000 XML y conserve todas sus filas.
 

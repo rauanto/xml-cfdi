@@ -8,8 +8,22 @@ use std::{
 
 use chrono::Local;
 use gpui::{
-    Context, FileDropEvent, FocusHandle, FontWeight, IntoElement, KeyDownEvent, PathPromptOptions,
-    Render, ScrollHandle, UniformListScrollHandle, Window, canvas, div, prelude::*, px,
+    Context, Entity, FileDropEvent, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    PathPromptOptions, Render, ScrollHandle, Subscription, UniformListScrollHandle, Window, canvas,
+    div, prelude::*, px,
+};
+use gpuikit::{
+    elements::{
+        button::button,
+        progress::progress as progress_bar,
+        tabs::{TabChanged, Tabs as KitTabs},
+        text_field::text_field,
+        toast::ToastExt,
+        typography::{small, text},
+    },
+    input::{InputState, InputStateEvent},
+    layout::{h_stack, v_stack},
+    theme::{ActiveTheme, Themeable},
 };
 use rust_decimal::Decimal;
 
@@ -28,8 +42,7 @@ use super::{
     drop_zone::DropZone,
     metrics::Metrics,
     status_bar::StatusBar,
-    tabs::Tabs,
-    theme::{self, Palette},
+    tabs, theme,
     toolbar::Toolbar,
 };
 
@@ -52,13 +65,12 @@ impl Vista {
         }
     }
 
-    fn desde_indice(index: usize) -> Option<Self> {
-        match index {
-            0 => Some(Self::Cfdi),
-            1 => Some(Self::Resumen),
-            2 => Some(Self::Clasificacion),
-            3 => Some(Self::Errores),
-            _ => None,
+    pub(super) fn id(self) -> &'static str {
+        match self {
+            Self::Cfdi => "cfdi",
+            Self::Resumen => "resumen",
+            Self::Clasificacion => "clasificacion",
+            Self::Errores => "errores",
         }
     }
 }
@@ -221,22 +233,65 @@ impl AppState {
 pub struct AppView {
     pub state: AppState,
     root_focus: FocusHandle,
-    rfc_focus: FocusHandle,
-    scroll_handles: [UniformListScrollHandle; 4],
-    horizontal_scroll_handles: [ScrollHandle; 4],
+    rfc_input: Entity<InputState>,
+    tabs: Entity<KitTabs>,
+    table_scroll_handles: [UniformListScrollHandle; 4],
+    table_horizontal_scroll_handles: [ScrollHandle; 4],
+    _rfc_subscription: Subscription,
+    tab_subscription: Subscription,
     pending_drop: Option<PathBuf>,
+    pending_toast: Option<(String, bool)>,
+    _appearance_subscription: Option<Subscription>,
 }
 
 impl AppView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>, window: &mut Window) -> Self {
+        let rfc_input = cx.new(InputState::new_singleline);
+        let tabs = tabs::create(cx, 0, Vista::Cfdi);
+        let appearance_subscription = cx.observe_window_appearance(window, |_, window, cx| {
+            theme::follow_system_appearance(window.appearance(), cx);
+            cx.notify();
+        });
+        let rfc_subscription =
+            cx.subscribe(&rfc_input, |this, input, event: &InputStateEvent, cx| {
+                if matches!(event, InputStateEvent::TextChanged) {
+                    let value = normalizar_caja_rfc(input.read(cx).content());
+                    if value != input.read(cx).content() {
+                        input.update(cx, |input, cx| input.set_content_silent(value.clone(), cx));
+                    }
+                    this.state.rfc_propio = value;
+                    cx.notify();
+                }
+            });
+        let tab_subscription = Self::subscribe_tabs(cx, &tabs);
         Self {
             state: AppState::default(),
             root_focus: cx.focus_handle(),
-            rfc_focus: cx.focus_handle(),
-            scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
-            horizontal_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
+            rfc_input,
+            tabs,
+            table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
+            table_horizontal_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
+            _rfc_subscription: rfc_subscription,
+            tab_subscription,
             pending_drop: None,
+            pending_toast: None,
+            _appearance_subscription: Some(appearance_subscription),
         }
+    }
+
+    fn subscribe_tabs(cx: &mut Context<Self>, tabs: &Entity<KitTabs>) -> Subscription {
+        cx.subscribe(tabs, |this, _, event: &TabChanged, cx| {
+            if let Some(tab) = tabs::from_id(event.tab_id.as_ref()) {
+                this.state.vista = tab;
+                cx.notify();
+            }
+        })
+    }
+
+    fn replace_tabs(&mut self, error_count: usize, cx: &mut Context<Self>) {
+        let tabs = tabs::create(cx, error_count, self.state.vista);
+        self.tab_subscription = Self::subscribe_tabs(cx, &tabs);
+        self.tabs = tabs;
     }
 
     fn open_zip_dialog(&mut self, cx: &mut Context<Self>) {
@@ -257,6 +312,10 @@ impl AppView {
                 this.update(cx, |this, cx| {
                     this.state
                         .set_error("No se pudo abrir el selector de archivos.");
+                    this.pending_toast = Some((
+                        "No se pudo abrir el selector de archivos.".to_owned(),
+                        false,
+                    ));
                     cx.notify();
                 })
                 .ok();
@@ -269,9 +328,11 @@ impl AppView {
     fn load_zip(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.state.set_zip(path.clone());
         if !es_zip(&path) {
-            self.state
-                .set_error("Selecciona un archivo con extensión .zip.");
+            let message = "Selecciona un archivo con extensión .zip.";
+            self.state.set_error(message);
+            self.pending_toast = Some((message.to_owned(), false));
         }
+        self.replace_tabs(0, cx);
         cx.notify();
     }
 
@@ -326,6 +387,20 @@ impl AppView {
             }
             WorkerMessage::Complete(result) => {
                 self.state.finish_processing(result);
+                let error_count = self
+                    .state
+                    .resultados
+                    .as_ref()
+                    .map_or(0, |result| result.errores.len());
+                self.replace_tabs(error_count, cx);
+                if self.state.estado == EstadoApp::Error {
+                    let message = self
+                        .state
+                        .mensaje_error
+                        .clone()
+                        .unwrap_or_else(|| "No se pudo procesar el ZIP.".to_owned());
+                    self.pending_toast = Some((message, false));
+                }
             }
         }
         cx.notify();
@@ -353,6 +428,10 @@ impl AppView {
                 this.update(cx, |this, cx| {
                     this.state
                         .set_error("No se pudo abrir el selector para guardar.");
+                    this.pending_toast = Some((
+                        "No se pudo abrir el selector para guardar.".to_owned(),
+                        false,
+                    ));
                     cx.notify();
                 })
                 .ok();
@@ -392,11 +471,15 @@ impl AppView {
                     Ok(()) => {
                         this.state.ruta_exportada = Some(path);
                         this.state.mensaje_error = None;
+                        this.pending_toast =
+                            Some(("Excel exportado correctamente.".to_owned(), true));
                     }
                     Err(error) => {
                         eprintln!("No se pudo exportar el Excel: {error}");
                         this.state.mensaje_error =
                             Some("No se pudo exportar el archivo Excel.".to_owned());
+                        this.pending_toast =
+                            Some(("No se pudo exportar el archivo Excel.".to_owned(), false));
                     }
                 }
                 cx.notify();
@@ -439,131 +522,98 @@ impl AppView {
             _ => false,
         };
         if handled {
-            window.focus(&self.root_focus);
+            window.focus(&self.root_focus, cx);
         }
     }
 
     fn select_tab(&mut self, tab: Vista, cx: &mut Context<Self>) {
         self.state.vista = tab;
+        self.tabs
+            .update(cx, |tabs, cx| tabs.set_selected(tab.id().into(), cx));
         cx.notify();
     }
 
-    fn update_rfc_from_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        if event.keystroke.modifiers.modified() {
-            return;
-        }
-        let key = event.keystroke.key.as_str();
-        if key == "backspace" {
-            self.state.rfc_propio.pop();
-        } else if key == "delete" {
-            self.state.rfc_propio.clear();
-        } else if let Some(character) = event.keystroke.key_char.as_deref() {
-            self.state
-                .rfc_propio
-                .push_str(&normalizar_caja_rfc(character));
-        }
-        cx.notify();
-    }
-
-    fn render_content(&mut self, palette: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         match self.state.estado {
             EstadoApp::Vacio => DropZone::new(
-                palette,
-                "Seleccionar archivo",
+                "Seleccionar archivo ZIP",
                 cx.listener(|this, _, _, cx| this.open_zip_dialog(cx)),
             )
             .into_any_element(),
-            EstadoApp::ZipCargado => div()
-                .flex()
-                .flex_col()
+            EstadoApp::ZipCargado => v_stack()
                 .items_center()
                 .justify_center()
-                .gap(px(theme::SPACING))
+                .gap_4()
                 .child(
-                    div()
-                        .text_size(px(theme::FONT_LABEL))
-                        .text_color(palette.text)
-                        .child(
-                            self.state
-                                .ruta_zip
-                                .as_deref()
-                                .and_then(Path::file_name)
-                                .map(|name| name.to_string_lossy().to_string())
-                                .unwrap_or_default(),
-                        ),
-                )
-                .child(
-                    DropZone::new(
-                        palette,
-                        "Seleccionar otro ZIP",
-                        cx.listener(|this, _, _, cx| this.open_zip_dialog(cx)),
+                    text(
+                        self.state
+                            .ruta_zip
+                            .as_deref()
+                            .and_then(Path::file_name)
+                            .map(|name| name.to_string_lossy().to_string())
+                            .unwrap_or_default(),
                     )
-                    .into_any_element(),
+                    .muted(),
                 )
+                .child(DropZone::new(
+                    "Seleccionar otro ZIP",
+                    cx.listener(|this, _, _, cx| this.open_zip_dialog(cx)),
+                ))
                 .into_any_element(),
-            EstadoApp::Error => div()
-                .flex()
-                .flex_col()
+            EstadoApp::Error => v_stack()
                 .items_center()
                 .justify_center()
-                .gap(px(theme::SPACING))
-                .text_size(px(theme::FONT_LABEL))
-                .text_color(palette.error)
-                .child(self.state.mensaje_error.clone().unwrap_or_default())
+                .gap_4()
+                .child(text(self.state.mensaje_error.clone().unwrap_or_default()).destructive())
                 .child(DropZone::new(
-                    palette,
                     "Seleccionar otro ZIP",
                     cx.listener(|this, _, _, cx| this.open_zip_dialog(cx)),
                 ))
                 .into_any_element(),
             EstadoApp::Procesando | EstadoApp::Resultados => {
-                self.render_preview(palette).into_any_element()
+                self.render_preview().into_any_element()
             }
         }
     }
 
-    fn render_preview(&mut self, palette: Palette) -> impl IntoElement {
+    fn render_preview(&mut self) -> impl IntoElement {
         let Some(resultados) = &self.state.resultados else {
-            return div().flex_1().into_any_element();
+            return small("Preparando vista previa…").muted().into_any_element();
         };
         match self.state.vista {
             Vista::Cfdi => DataTable::new(
-                palette,
                 &CFDI_COLUMNS,
                 Arc::clone(&resultados.filas),
                 cfdi_cell,
-                self.scroll_handles[0].clone(),
-                self.horizontal_scroll_handles[0].clone(),
+                self.table_scroll_handles[0].clone(),
+                self.table_horizontal_scroll_handles[0].clone(),
                 "cfdi-rows",
             )
             .into_any_element(),
             Vista::Resumen => DataTable::new(
-                palette,
                 &RESUMEN_COLUMNS,
                 Arc::clone(&resultados.resumen),
                 resumen_cell,
-                self.scroll_handles[1].clone(),
-                self.horizontal_scroll_handles[1].clone(),
+                self.table_scroll_handles[1].clone(),
+                self.table_horizontal_scroll_handles[1].clone(),
                 "summary-rows",
             )
             .into_any_element(),
             Vista::Clasificacion => DataTable::new(
-                palette,
                 &CLASIFICACION_COLUMNS,
                 Arc::clone(&resultados.clasificaciones),
                 clasificacion_cell,
-                self.scroll_handles[2].clone(),
-                self.horizontal_scroll_handles[2].clone(),
+                self.table_scroll_handles[2].clone(),
+                self.table_horizontal_scroll_handles[2].clone(),
                 "classification-rows",
             )
             .into_any_element(),
             Vista::Errores => DataTable::new(
-                palette,
                 &ERROR_COLUMNS,
                 Arc::clone(&resultados.errores),
                 error_cell,
-                self.scroll_handles[3].clone(),
-                self.horizontal_scroll_handles[3].clone(),
+                self.table_scroll_handles[3].clone(),
+                self.table_horizontal_scroll_handles[3].clone(),
                 "error-rows",
             )
             .into_any_element(),
@@ -578,10 +628,10 @@ enum WorkerMessage {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = theme::for_appearance(window.appearance());
+        theme::follow_system_appearance(window.appearance(), cx);
         let status = self.state.status_text();
         let exported = self.state.ruta_exportada.clone();
-        let progress = self.state.estado == EstadoApp::Procesando;
+        let is_processing = self.state.estado == EstadoApp::Procesando;
         let progress_fraction = if self.state.total == 0 {
             0.0
         } else {
@@ -592,11 +642,6 @@ impl Render for AppView {
             format_integer(self.state.procesados),
             format_integer(self.state.total)
         );
-        let error_count = self
-            .state
-            .resultados
-            .as_ref()
-            .map_or(0, |result| result.errores.len());
         let is_exportable = self.state.resultados.is_some() && !self.state.exportando;
 
         let drop_view = cx.entity().downgrade();
@@ -626,29 +671,27 @@ impl Render for AppView {
         .size_full();
 
         let root_focus = self.root_focus.clone();
-        let rfc_focus = self.rfc_focus.clone();
         let state = self.state.clone();
-        let accent = palette.accent;
-        let progress_element = if progress {
-            div()
-                .w_full()
-                .h(px(theme::PROGRESS_HEIGHT))
-                .bg(palette.border)
-                .child(
-                    div()
-                        .h_full()
-                        .w(gpui::relative(progress_fraction))
-                        .bg(accent),
-                )
+        if let Some((message, success)) = self.pending_toast.take() {
+            window.defer(cx, move |window, cx| {
+                let toast = cx.toast(message);
+                if success {
+                    toast.success().show(window, cx);
+                } else {
+                    toast.destructive().show(window, cx);
+                }
+            });
+        }
+
+        let progress_element = if is_processing {
+            progress_bar(progress_fraction)
+                .height(px(2.))
                 .into_any_element()
         } else {
-            div()
-                .w_full()
-                .h(px(theme::PROGRESS_HEIGHT))
-                .into_any_element()
+            div().h(px(2.)).into_any_element()
         };
 
-        div()
+        v_stack()
             .id("app-root")
             .track_focus(&root_focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -658,70 +701,49 @@ impl Render for AppView {
                     this.on_shortcut(event, window, cx);
                 }
             }))
-            .on_click(cx.listener(|this, _, window, _| {
-                if !this.rfc_focus.is_focused(window) {
-                    window.focus(&this.root_focus);
+            .on_click(cx.listener(|this, _, window, cx| {
+                let rfc_focus = this.rfc_input.read(cx).focus_handle(cx);
+                if !rfc_focus.is_focused(window) {
+                    window.focus(&this.root_focus, cx);
                 }
             }))
             .size_full()
-            .flex()
-            .flex_col()
             .font(gpui::Font {
                 features: theme::tabular_numbers(),
-                ..gpui::font("Inter")
+                ..gpui::font("system-ui")
             })
-            .text_size(px(theme::FONT_BODY))
-            .text_color(palette.text)
-            .bg(palette.background)
+            .text_color(cx.theme().fg())
+            .bg(cx.theme().bg())
             .child(Toolbar::new(
-                palette,
                 is_exportable,
                 cx.listener(|this, _, _, cx| this.choose_export_path(cx)),
             ))
-            .child(self.render_options(palette, rfc_focus, cx))
+            .child(self.render_options(cx))
             .child(progress_element)
-            .when(progress, |element| {
-                element.child(
-                    div()
-                        .h(px(theme::METRICS_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .px(px(theme::CONTENT_PADDING))
-                        .text_size(px(theme::FONT_SMALL))
-                        .text_color(palette.secondary)
-                        .child(progress_label),
-                )
+            .when(is_processing, |element| {
+                element.child(div().px_6().py_1().child(small(progress_label).muted()))
             })
             .when(state.resultados.is_some(), |element| {
                 element
-                    .child(Metrics::new(palette, state.clone()))
-                    .child(Tabs::new(
-                        palette,
-                        state.vista,
-                        error_count,
-                        cx.listener(|this, index: &usize, _, cx| {
-                            if let Some(tab) = Vista::desde_indice(*index) {
-                                this.select_tab(tab, cx);
-                            }
-                        }),
-                    ))
+                    .child(Metrics::new(state.clone()))
+                    .child(self.tabs.clone())
             })
             .child(
-                div()
+                v_stack()
                     .flex_1()
+                    .w_full()
+                    .min_w_0()
                     .min_h_0()
-                    .flex()
-                    .flex_col()
                     .items_center()
                     .justify_center()
-                    .px(px(theme::CONTENT_PADDING))
+                    .px_6()
+                    .py_2()
                     .when(state.resultados.is_some(), |element| {
-                        element.items_start().justify_start()
+                        element.items_start().justify_start().px_0().py_0()
                     })
-                    .child(self.render_content(palette, cx)),
+                    .child(self.render_content(cx)),
             )
             .child(StatusBar::new(
-                palette,
                 state.ruta_zip.clone(),
                 status,
                 exported.clone(),
@@ -738,12 +760,7 @@ impl Render for AppView {
 }
 
 impl AppView {
-    fn render_options(
-        &mut self,
-        palette: Palette,
-        rfc_focus: FocusHandle,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_options(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = self.state.ruta_zip.is_some()
             && matches!(
                 self.state.estado,
@@ -751,75 +768,27 @@ impl AppView {
             );
         let validation = validar_rfc(&self.state.rfc_propio)
             .unwrap_or("RFC opcional; se normaliza a mayúsculas");
-        div()
+        h_stack()
             .w_full()
-            .h(px(theme::OPTIONS_HEIGHT))
             .flex()
             .items_center()
-            .gap(px(theme::SPACING))
-            .px(px(theme::CONTENT_PADDING))
+            .gap_3()
+            .px_6()
+            .py_2()
             .border_b_1()
-            .border_color(palette.border)
-            .bg(palette.surface)
+            .border_color(cx.theme().border())
+            .bg(cx.theme().surface())
+            .child(text("RFC propio (opcional)").muted())
             .child(
                 div()
-                    .text_size(px(theme::FONT_BODY))
-                    .text_color(palette.secondary)
-                    .child("RFC propio (opcional)"),
+                    .w(px(224.))
+                    .child(text_field(&self.rfc_input, cx).placeholder("RFC")),
             )
+            .child(div().flex_1().truncate().child(small(validation).muted()))
             .child(
-                div()
-                    .id("rfc-input")
-                    .w(px(theme::RFC_INPUT_WIDTH))
-                    .h(px(theme::CONTROL_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .px(px(theme::SPACING))
-                    .rounded(px(theme::CORNER_RADIUS))
-                    .border_1()
-                    .border_color(palette.border)
-                    .bg(palette.background)
-                    .track_focus(&rfc_focus)
-                    .on_click(cx.listener(move |this, _, window, _| {
-                        window.focus(&this.rfc_focus);
-                    }))
-                    .on_key_down(cx.listener(|this, event, _, cx| {
-                        this.update_rfc_from_key(event, cx);
-                    }))
-                    .text_size(px(theme::FONT_BODY))
-                    .text_color(palette.text)
-                    .child(if self.state.rfc_propio.is_empty() {
-                        "RFC".to_owned()
-                    } else {
-                        self.state.rfc_propio.clone()
-                    }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(theme::FONT_SMALL))
-                    .text_color(palette.secondary)
-                    .child(validation),
-            )
-            .child(
-                div()
-                    .id("process-button")
-                    .h(px(theme::CONTROL_HEIGHT))
-                    .px(px(theme::SPACING))
-                    .flex()
-                    .items_center()
-                    .rounded(px(theme::CORNER_RADIUS))
-                    .bg(if enabled {
-                        palette.accent
-                    } else {
-                        palette.border
-                    })
-                    .text_size(px(theme::FONT_BODY))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(palette.accent_text)
-                    .when(enabled, |button| button.cursor_pointer())
-                    .on_click(cx.listener(|this, _, _, cx| this.process_zip(cx)))
-                    .child("Procesar"),
+                button("process-button", "Procesar")
+                    .disabled(!enabled)
+                    .on_click(cx.listener(|this, _, _, cx| this.process_zip(cx))),
             )
     }
 }

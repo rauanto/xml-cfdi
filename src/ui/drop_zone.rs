@@ -1,24 +1,27 @@
-//! Área simple para seleccionar o soltar un archivo ZIP.
+//! Área de carga con botón, layout y tokens de gpuikit.
 
-use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, div, prelude::*, px};
+use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, prelude::*};
+use gpuikit::{
+    elements::typography::text,
+    layout::v_stack,
+    theme::{ActiveTheme, Themeable},
+};
 
-use super::{UiClickHandler, theme, theme::Palette};
+use super::UiClickHandler;
+use super::theme;
 
 #[derive(IntoElement)]
 pub struct DropZone {
-    palette: Palette,
     button_label: &'static str,
     on_click: Box<UiClickHandler>,
 }
 
 impl DropZone {
     pub fn new(
-        palette: Palette,
         button_label: &'static str,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         Self {
-            palette,
             button_label,
             on_click: Box::new(on_click),
         }
@@ -26,37 +29,24 @@ impl DropZone {
 }
 
 impl RenderOnce for DropZone {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let palette = self.palette;
-        div()
-            .id("zip-drop-zone")
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        v_stack()
+            .id("drop-zone")
             .w_full()
-            .max_w(px(theme::DROP_ZONE_WIDTH))
-            .h(px(theme::DROP_ZONE_HEIGHT))
-            .flex()
-            .flex_col()
-            .justify_center()
+            .max_w(gpui::px(theme::DROP_ZONE_WIDTH))
+            .h(gpui::px(theme::DROP_ZONE_HEIGHT))
             .items_center()
-            .gap(px(theme::SPACING))
-            .rounded(px(theme::CORNER_RADIUS))
+            .justify_center()
+            .gap_3()
+            .rounded_lg()
             .border_dashed()
             .border_1()
-            .border_color(palette.border)
-            .bg(palette.surface)
+            .border_color(theme.border())
+            .bg(theme.surface())
             .cursor_pointer()
-            .hover(|style| style.bg(palette.hover))
             .on_click(self.on_click)
-            .child(
-                div()
-                    .text_size(px(theme::FONT_LABEL))
-                    .text_color(palette.text)
-                    .child("Arrastra un .zip o haz clic para seleccionarlo"),
-            )
-            .child(
-                div()
-                    .text_size(px(theme::FONT_SMALL))
-                    .text_color(palette.secondary)
-                    .child(self.button_label),
-            )
+            .child(text("Arrastra un .zip o haz clic para seleccionarlo"))
+            .child(text(self.button_label).accent())
     }
 }

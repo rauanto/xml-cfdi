@@ -1,24 +1,26 @@
-//! Barra superior y acciones principales.
+//! Barra superior compuesta con controles y tipografía de gpuikit.
 
-use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, div, prelude::*, px};
+use gpui::{App, ClickEvent, IntoElement, RenderOnce, Window, prelude::*};
+use gpuikit::{
+    elements::{button::button, typography::h4},
+    layout::h_stack,
+    theme::{ActiveTheme, Themeable},
+};
 
-use super::{UiClickHandler, theme, theme::Palette};
+use super::UiClickHandler;
 
 #[derive(IntoElement)]
 pub struct Toolbar {
-    palette: Palette,
     export_enabled: bool,
     on_export: Box<UiClickHandler>,
 }
 
 impl Toolbar {
     pub fn new(
-        palette: Palette,
         export_enabled: bool,
         on_export: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         Self {
-            palette,
             export_enabled,
             on_export: Box::new(on_export),
         }
@@ -26,50 +28,22 @@ impl Toolbar {
 }
 
 impl RenderOnce for Toolbar {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let palette = self.palette;
-        let enabled = self.export_enabled;
-        div()
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        h_stack()
             .w_full()
-            .h(px(theme::TOP_BAR_HEIGHT))
-            .flex()
-            .flex_row()
+            .h(gpui::rems(3.0))
             .items_center()
             .justify_between()
-            .px(px(theme::CONTENT_PADDING))
+            .px_6()
             .border_b_1()
-            .border_color(palette.border)
-            .bg(palette.surface)
+            .border_color(theme.border())
+            .bg(theme.bg())
+            .child(h4("CFDI ZIP Processor"))
             .child(
-                div()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(px(theme::FONT_TITLE))
-                    .text_color(palette.text)
-                    .child("CFDI ZIP Processor"),
-            )
-            .child(
-                div()
-                    .id("export-button")
-                    .h(px(theme::CONTROL_HEIGHT))
-                    .px(px(theme::SPACING))
-                    .flex()
-                    .items_center()
-                    .rounded(px(theme::CORNER_RADIUS))
-                    .border_1()
-                    .border_color(palette.border)
-                    .text_size(px(theme::FONT_BODY))
-                    .text_color(if enabled {
-                        palette.text
-                    } else {
-                        palette.secondary
-                    })
-                    .when(enabled, |style| {
-                        style
-                            .cursor_pointer()
-                            .hover(|style| style.bg(palette.hover))
-                    })
-                    .on_click(self.on_export)
-                    .child("Exportar Excel"),
+                button("export-button", "Exportar Excel")
+                    .disabled(!self.export_enabled)
+                    .on_click(self.on_export),
             )
     }
 }

@@ -1,14 +1,18 @@
-//! Ruta y estado discreto en el pie de ventana.
+//! Ruta y estado discreto con controles y tipografía gpuikit.
 
 use std::path::PathBuf;
 
-use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, div, prelude::*, px};
+use gpui::{App, ClickEvent, IntoElement, ParentElement, RenderOnce, Window, div, prelude::*};
+use gpuikit::{
+    elements::{button::button, typography::text},
+    layout::h_stack,
+    theme::{ActiveTheme, Themeable},
+};
 
-use super::{UiClickHandler, theme, theme::Palette};
+use super::UiClickHandler;
 
 #[derive(IntoElement)]
 pub struct StatusBar {
-    palette: Palette,
     path: Option<PathBuf>,
     status: String,
     exported: Option<PathBuf>,
@@ -17,14 +21,12 @@ pub struct StatusBar {
 
 impl StatusBar {
     pub fn new(
-        palette: Palette,
         path: Option<PathBuf>,
         status: String,
         exported: Option<PathBuf>,
         on_reveal: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         Self {
-            palette,
             path,
             status,
             exported,
@@ -34,46 +36,29 @@ impl StatusBar {
 }
 
 impl RenderOnce for StatusBar {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let palette = self.palette;
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
         let path = self
             .path
             .as_deref()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
-        let mut footer = div()
+
+        h_stack()
             .w_full()
-            .h(px(theme::STATUS_HEIGHT))
-            .flex()
+            .h(gpui::rems(1.75))
             .items_center()
-            .justify_between()
-            .gap(px(theme::SPACING))
-            .px(px(theme::CONTENT_PADDING))
+            .gap_3()
+            .px_6()
             .border_t_1()
-            .border_color(palette.border)
-            .bg(palette.surface)
-            .text_size(px(theme::FONT_SMALL))
-            .text_color(palette.secondary)
-            .child(div().flex_1().truncate().child(path));
-
-        footer = footer.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(theme::SPACING))
-                .child(div().truncate().child(self.status)),
-        );
-
-        if self.exported.is_some() {
-            footer = footer.child(
-                div()
-                    .id("reveal-export-folder")
-                    .cursor_pointer()
-                    .text_color(palette.accent)
-                    .on_click(self.on_reveal)
-                    .child("Abrir carpeta"),
-            );
-        }
-        footer
+            .border_color(theme.border())
+            .bg(theme.surface())
+            .text_color(theme.fg_muted())
+            .child(text(path).small().truncate(true))
+            .child(div().flex_1())
+            .when_some(self.exported, |bar, _| {
+                bar.child(button("reveal-export-folder", "Abrir carpeta").on_click(self.on_reveal))
+            })
+            .child(text(self.status).small().truncate(true))
     }
 }
