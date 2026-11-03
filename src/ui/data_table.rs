@@ -556,8 +556,13 @@ impl Render for TablaVista {
                     .child(div().text_size(px(12.)).text_color(c.muted).child("Buscar"))
                     .child(
                         div()
+                            .id("tabla-busqueda")
                             .w(px(220.))
                             .on_key_down(|_: &KeyDownEvent, _, cx| cx.stop_propagation())
+                            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_click(|_: &ClickEvent, _, cx| cx.stop_propagation())
                             .child(
                                 text_field(&self.busqueda_input, cx)
                                     .placeholder("Buscar en la tabla…"),
