@@ -27,9 +27,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use gpui::{
-    ClickEvent, ClipboardItem, Context, Entity, FocusHandle, Hsla, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render, ScrollHandle,
-    ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    App, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render,
+    ScrollHandle, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
     UniformListScrollHandle, Window, div, point, prelude::*, px, uniform_list,
 };
 use gpuikit::{
@@ -312,6 +312,13 @@ impl TablaVista {
         }
     }
 
+    pub(crate) fn busqueda_tiene_foco(&self, window: &Window, cx: &App) -> bool {
+        self.busqueda_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }
+
     pub fn set_filtro(&mut self, col: usize, texto: &str, cx: &mut Context<Self>) {
         if texto.trim().is_empty() {
             self.estado.filtros.remove(&col);
@@ -558,10 +565,6 @@ impl Render for TablaVista {
                         div()
                             .id("tabla-busqueda")
                             .w(px(220.))
-                            .on_key_down(|_: &KeyDownEvent, _, cx| cx.stop_propagation())
-                            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation()
-                            })
                             .on_click(|_: &ClickEvent, _, cx| cx.stop_propagation())
                             .child(
                                 text_field(&self.busqueda_input, cx)

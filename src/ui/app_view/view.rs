@@ -326,7 +326,10 @@ impl Render for AppView {
             }))
             .on_click(cx.listener(|this, _, window, cx| {
                 let rfc_focus = this.rfc_input.read(cx).focus_handle(cx);
-                if !rfc_focus.is_focused(window) {
+                let search_focus = this.tables[this.state.vista.index()]
+                    .read(cx)
+                    .busqueda_tiene_foco(window, cx);
+                if !rfc_focus.is_focused(window) && !search_focus {
                     window.focus(&this.root_focus, cx);
                 }
             }))

@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
@@ -5,7 +7,6 @@ use gpui::{
 use cfdi_zip_processor::ui::theme;
 
 fn main() -> anyhow::Result<()> {
-    #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
     Application::with_platform(gpui_platform::current_platform(false))
         .with_assets(gpuikit::assets())
         .run(|cx: &mut App| {
