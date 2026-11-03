@@ -6,15 +6,15 @@ Aplicación de escritorio (Rust + GPUI) que procesa un archivo ZIP con CFDI en X
 
 ## Stack
 
-| Capa | Tecnología |
-|------|-----------|
-| UI | `gpuikit` 0.9.0 sobre `gpui-unofficial` 1.14.2 |
-| ZIP | `zip` |
-| XML con namespaces | `quick-xml` (`NsReader`) |
-| Excel | `rust_xlsxwriter` |
-| Decimales | `rust_decimal` (nunca `f64` para dinero) |
-| Errores | `thiserror` |
-| Tests | `cargo test` + fixtures XML en `tests/fixtures/` + lectura XLSX con `calamine` |
+| Capa               | Tecnología                                                                     |
+| ------------------ | ------------------------------------------------------------------------------ |
+| UI                 | `gpuikit` 0.9.0 sobre `gpui-unofficial` 1.14.2                                 |
+| ZIP                | `zip`                                                                          |
+| XML con namespaces | `quick-xml` (`NsReader`)                                                       |
+| Excel              | `rust_xlsxwriter`                                                              |
+| Decimales          | `rust_decimal` (nunca `f64` para dinero)                                       |
+| Errores            | `thiserror`                                                                    |
+| Tests              | `cargo test` + fixtures XML en `tests/fixtures/` + lectura XLSX con `calamine` |
 
 ## Flujo
 
@@ -28,10 +28,10 @@ Aplicación de escritorio (Rust + GPUI) que procesa un archivo ZIP con CFDI en X
 
 ## Namespaces
 
-| Prefijo | URI | Uso |
-|---------|-----|-----|
-| `cfdi` | `http://www.sat.gob.mx/cfd/4` (y `/cfd/3`) | Comprobante, Emisor, Receptor, Conceptos, Impuestos |
-| `tfd` | `http://www.sat.gob.mx/TimbreFiscalDigital` | `TimbreFiscalDigital` → `UUID` |
+| Prefijo | URI                                         | Uso                                                 |
+| ------- | ------------------------------------------- | --------------------------------------------------- |
+| `cfdi`  | `http://www.sat.gob.mx/cfd/4` (y `/cfd/3`)  | Comprobante, Emisor, Receptor, Conceptos, Impuestos |
+| `tfd`   | `http://www.sat.gob.mx/TimbreFiscalDigital` | `TimbreFiscalDigital` → `UUID`                      |
 
 Se resuelve por **URI del namespace**, nunca por el texto del prefijo (un XML puede usar otro prefijo). Se soportan CFDI 3.3 y 4.0.
 
@@ -97,9 +97,10 @@ La UI nunca parsea ni escribe archivos directamente: llama a los casos de uso. E
 
 La ventana abre a 1200 × 760 px y admite un mínimo de 900 × 560 px. La interfaz usa componentes de GPUKit para botones, campo de texto, pestañas, métricas, tarjetas, badges, progreso, notificaciones, tipografía y layout. La apariencia del sistema selecciona entre los temas claro y oscuro Gruvbox incluidos en GPUKit.
 
-Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana. 
+Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana.
 
 Las vistas previas cuentan con:
+
 - **Búsqueda global** por texto y botón para limpiar la búsqueda.
 - **Ordenamiento** ascendente y descendente al pulsar un encabezado; `Mayús + clic` añade criterios de orden.
 - **Columnas configurables**: arrastra el borde del encabezado para cambiar su ancho; desde **Columnas** se pueden ocultar, reordenar y restaurar.
