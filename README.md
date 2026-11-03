@@ -100,9 +100,13 @@ La ventana abre a 1200 × 760 px y admite un mínimo de 900 × 560 px. La interf
 Selecciona un ZIP con el área de carga o arrástralo a la ventana. Añade un RFC propio opcional y pulsa **Procesar**. El progreso se actualiza sin bloquear la ventana. 
 
 Las vistas previas cuentan con:
-- **Ajuste dinámico de columnas**: en tablas con pocas columnas (Resumen y Errores), las columnas principales se expanden automáticamente para aprovechar el 100% del ancho de la ventana.
-- **Desplazamiento horizontal fluido**: en tablas anchas (CFDI con 21 columnas y Clasificación sugerida), el usuario puede desplazarse horizontalmente mediante el trackpad, `Mayús + rueda del ratón` o usando los botones de navegación rápida de la barra inferior de la tabla (`⇤ Inicio`, `◀ Deslizar`, `Deslizar ▶`, `Final ⇥`). El scroll normal con la rueda del ratón se desplaza verticalmente por las filas.
-- **Virtualización vertical de alto rendimiento**: implementada con `uniform_list` y pre-formateo en `SharedString`, manteniendo 60 fps y respuesta inmediata incluso con miles de filas.
+- **Búsqueda global** por texto y botón para limpiar la búsqueda.
+- **Ordenamiento** ascendente y descendente al pulsar un encabezado; `Mayús + clic` añade criterios de orden.
+- **Columnas configurables**: arrastra el borde del encabezado para cambiar su ancho; desde **Columnas** se pueden ocultar, reordenar y restaurar.
+- **Selección y copia**: clic, `Ctrl/Cmd + clic` y `Mayús + clic` seleccionan filas; `Ctrl/Cmd + C` copia la selección como TSV para pegar en Excel. El botón **Copiar** copia la selección o, si no hay selección, todas las filas visibles.
+- **Totales de importe** en el pie cuando la tabla tiene columnas sumables; si hay filas seleccionadas, el total corresponde a esa selección.
+- **Desplazamiento horizontal** con trackpad o los botones **Inicio**, **Anterior**, **Siguiente** y **Final**. El scroll vertical permanece en las filas.
+- **Virtualización vertical** mediante `uniform_list` y celdas preformateadas en `SharedString`, evitando recrear los datos al renderizar.
 
 Atajos:
 

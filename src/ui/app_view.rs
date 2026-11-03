@@ -8,8 +8,7 @@ use std::{
 use chrono::Local;
 use gpui::{
     Context, Entity, FileDropEvent, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    PathPromptOptions, Render, ScrollHandle, Subscription, UniformListScrollHandle, Window, canvas,
-    div, prelude::*, px,
+    PathPromptOptions, Render, ScrollHandle, Subscription, Window, canvas, div, prelude::*, px,
 };
 use gpuikit::{
     elements::{
@@ -43,7 +42,7 @@ use crate::{
 
 use super::{
     data_table::{
-        CFDI_COLUMNS, CLASIFICACION_COLUMNS, DataTable, ERROR_COLUMNS, Fila, RESUMEN_COLUMNS,
+        CFDI_COLUMNS, CLASIFICACION_COLUMNS, ERROR_COLUMNS, Fila, RESUMEN_COLUMNS, TablaVista,
         construir_filas,
     },
     drop_zone::DropZone,
@@ -302,8 +301,7 @@ pub struct AppView {
     excel_format_input: Entity<InputState>,
     tabs: Entity<KitTabs>,
     config_repository: TomlConfigRepository,
-    table_scroll_handles: [UniformListScrollHandle; 4],
-    table_h_scroll_handles: [ScrollHandle; 4],
+    tables: [Entity<TablaVista>; 4],
     settings_scroll: ScrollHandle,
     last_config_snapshot: AppConfig,
     config_save_generation: u64,
@@ -353,6 +351,35 @@ impl AppView {
         });
 
         let tabs = tabs::create(cx, None, Vista::Cfdi);
+        let empty_rows = Arc::new(Vec::new());
+        let tables = [
+            cx.new(|cx| TablaVista::new(&CFDI_COLUMNS, empty_rows.clone(), "cfdi-rows", cx)),
+            cx.new(|cx| TablaVista::new(&RESUMEN_COLUMNS, empty_rows.clone(), "summary-rows", cx)),
+            cx.new(|cx| {
+                TablaVista::new(
+                    &CLASIFICACION_COLUMNS,
+                    empty_rows.clone(),
+                    "classification-rows",
+                    cx,
+                )
+            }),
+            cx.new(|cx| TablaVista::new(&ERROR_COLUMNS, empty_rows, "error-rows", cx)),
+        ];
+        let table_presentation = (
+            state.config.tabla.altura_fila as f32,
+            state.config.tabla.mostrar_hover,
+            state.config.tabla.overscan_px,
+        );
+        for table in &tables {
+            table.update(cx, |table, cx| {
+                table.set_presentacion(
+                    table_presentation.0,
+                    table_presentation.1,
+                    table_presentation.2,
+                    cx,
+                );
+            });
+        }
         let appearance_subscription = cx.observe_window_appearance(window, |this, window, cx| {
             theme::apply_configured_appearance(
                 &this.state.config.apariencia.tema,
@@ -411,7 +438,10 @@ impl AppView {
             })
         });
         let tab_subscription = Self::subscribe_tabs(cx, &tabs);
-        let config_observer = cx.observe_self(|this, cx| this.schedule_config_save(cx));
+        let config_observer = cx.observe_self(|this, cx| {
+            this.schedule_config_save(cx);
+            this.sync_table_preferences(cx);
+        });
         let last_config_snapshot = state.config.clone();
         Self {
             state,
@@ -420,8 +450,7 @@ impl AppView {
             excel_format_input,
             tabs,
             config_repository,
-            table_scroll_handles: std::array::from_fn(|_| UniformListScrollHandle::new()),
-            table_h_scroll_handles: std::array::from_fn(|_| ScrollHandle::new()),
+            tables,
             settings_scroll: ScrollHandle::new(),
             last_config_snapshot,
             config_save_generation: 0,
@@ -477,6 +506,8 @@ impl AppView {
                 this.update(cx, |this, cx| {
                     this.state
                         .set_error("No se pudo abrir el selector de archivos.");
+                    this.replace_tabs(cx);
+                    this.sync_table_rows(cx);
                     this.pending_toast = Some((
                         "No se pudo abrir el selector de archivos.".to_owned(),
                         false,
@@ -498,6 +529,7 @@ impl AppView {
             self.pending_toast = Some((message.to_owned(), false));
         }
         self.replace_tabs(cx);
+        self.sync_table_rows(cx);
         cx.notify();
     }
 
@@ -508,6 +540,7 @@ impl AppView {
         if !self.state.start_processing() {
             return;
         }
+        self.sync_table_rows(cx);
         cx.notify();
 
         let rfc = (!self.state.rfc_propio.trim().is_empty())
@@ -554,6 +587,7 @@ impl AppView {
             WorkerMessage::Complete(result, tablas) => {
                 self.state.finish_processing(result, tablas);
                 self.replace_tabs(cx);
+                self.sync_table_rows(cx);
                 if self.state.estado == EstadoApp::Error {
                     let message = self
                         .state
@@ -589,6 +623,8 @@ impl AppView {
                 this.update(cx, |this, cx| {
                     this.state
                         .set_error("No se pudo abrir el selector para guardar.");
+                    this.replace_tabs(cx);
+                    this.sync_table_rows(cx);
                     this.pending_toast = Some((
                         "No se pudo abrir el selector para guardar.".to_owned(),
                         false,
@@ -769,6 +805,39 @@ impl AppView {
         self.excel_format_input.update(cx, |input, cx| {
             input.set_content_silent(filename_format, cx)
         });
+    }
+
+    fn sync_table_preferences(&mut self, cx: &mut Context<Self>) {
+        let presentation = (
+            self.state.config.tabla.altura_fila as f32,
+            self.state.config.tabla.mostrar_hover,
+            self.state.config.tabla.overscan_px,
+        );
+        for table in &self.tables {
+            table.update(cx, |table, cx| {
+                table.set_presentacion(presentation.0, presentation.1, presentation.2, cx);
+            });
+        }
+    }
+
+    fn sync_table_rows(&mut self, cx: &mut Context<Self>) {
+        let rows = self
+            .state
+            .resultados
+            .as_ref()
+            .map(|resultados| {
+                [
+                    Arc::clone(&resultados.tablas.cfdi),
+                    Arc::clone(&resultados.tablas.resumen),
+                    Arc::clone(&resultados.tablas.clasificaciones),
+                    Arc::clone(&resultados.tablas.errores),
+                ]
+            })
+            .unwrap_or_else(|| std::array::from_fn(|_| Arc::new(Vec::new())));
+
+        for (table, rows) in self.tables.iter().zip(rows) {
+            table.update(cx, |table, cx| table.set_rows(rows, cx));
+        }
     }
 
     fn save_config(&mut self, cx: &mut Context<Self>) {
@@ -1951,48 +2020,12 @@ impl AppView {
     }
 
     fn render_preview(&mut self) -> impl IntoElement {
-        let Some(resultados) = &self.state.resultados else {
+        if self.state.resultados.is_none() {
             return small("Preparando vista previa…").muted().into_any_element();
-        };
-        match self.state.vista {
-            Vista::Cfdi => DataTable::new(
-                &CFDI_COLUMNS,
-                Arc::clone(&resultados.tablas.cfdi),
-                self.table_scroll_handles[0].clone(),
-                self.table_h_scroll_handles[0].clone(),
-                "cfdi-rows",
-                self.state.config.tabla.altura_fila.clamp(28, 44),
-                self.state.config.tabla.mostrar_hover,
-            ),
-            Vista::Resumen => DataTable::new(
-                &RESUMEN_COLUMNS,
-                Arc::clone(&resultados.tablas.resumen),
-                self.table_scroll_handles[1].clone(),
-                self.table_h_scroll_handles[1].clone(),
-                "summary-rows",
-                self.state.config.tabla.altura_fila.clamp(28, 44),
-                self.state.config.tabla.mostrar_hover,
-            ),
-            Vista::Clasificacion => DataTable::new(
-                &CLASIFICACION_COLUMNS,
-                Arc::clone(&resultados.tablas.clasificaciones),
-                self.table_scroll_handles[2].clone(),
-                self.table_h_scroll_handles[2].clone(),
-                "classification-rows",
-                self.state.config.tabla.altura_fila.clamp(28, 44),
-                self.state.config.tabla.mostrar_hover,
-            ),
-            Vista::Errores => DataTable::new(
-                &ERROR_COLUMNS,
-                Arc::clone(&resultados.tablas.errores),
-                self.table_scroll_handles[3].clone(),
-                self.table_h_scroll_handles[3].clone(),
-                "error-rows",
-                self.state.config.tabla.altura_fila.clamp(28, 44),
-                self.state.config.tabla.mostrar_hover,
-            ),
         }
-        .into_any_element()
+        self.tables[self.state.vista.index()]
+            .clone()
+            .into_any_element()
     }
 }
 

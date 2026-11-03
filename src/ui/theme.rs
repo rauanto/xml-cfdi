@@ -86,11 +86,11 @@ fn classic_light_theme() -> Theme {
     let mut theme = Theme::new(
         "Clásico Claro",
         ThemeVariant::Light,
-        c(0.583, 0.25, 0.16),   // texto (tinta)
-        c(PAPER, 0.40, 0.965),  // fondo (marfil)
-        c(PAPER, 0.30, 0.99),   // superficie (tabla, paneles)
-        c(0.117, 0.20, 0.81),   // borde
-        accent,                 // acento
+        c(0.583, 0.25, 0.16),  // texto (tinta)
+        c(PAPER, 0.40, 0.965), // fondo (marfil)
+        c(PAPER, 0.30, 0.99),  // superficie (tabla, paneles)
+        c(0.117, 0.20, 0.81),  // borde
+        accent,                // acento
     );
     theme.fg_muted_color = Some(c(INK, 0.10, 0.40));
     theme.fg_disabled_color = Some(c(INK, 0.06, 0.62));
@@ -123,11 +123,11 @@ fn classic_dark_theme() -> Theme {
     let mut theme = Theme::new(
         "Clásico Oscuro",
         ThemeVariant::Dark,
-        text,                    // texto
-        c(SLATE, 0.10, 0.115),   // fondo (carbón)
-        c(SLATE, 0.10, 0.15),    // superficie
-        c(SLATE, 0.09, 0.23),    // borde
-        accent,                  // acento
+        text,                  // texto
+        c(SLATE, 0.10, 0.115), // fondo (carbón)
+        c(SLATE, 0.10, 0.15),  // superficie
+        c(SLATE, 0.09, 0.23),  // borde
+        accent,                // acento
     );
     theme.fg_muted_color = Some(c(SLATE, 0.08, 0.63));
     theme.fg_disabled_color = Some(c(SLATE, 0.06, 0.42));

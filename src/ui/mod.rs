@@ -7,6 +7,7 @@ pub mod data_table;
 pub mod drop_zone;
 pub mod metrics;
 pub mod status_bar;
+pub mod table_model;
 pub mod tabs;
 pub mod theme;
 pub mod toolbar;
