@@ -208,7 +208,3 @@ Los cambios de configuración solo afectan la presentación, clasificación suge
 cargo run --release
 cargo test
 ```
-
-## Licencia
-
-Por definir.
